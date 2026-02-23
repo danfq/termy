@@ -3,6 +3,7 @@ use gpui::{
     Pixels, ShapedLine, Styled, TextAlign, TextRun, UTF16Selection, UnderlineStyle, canvas, fill,
     point, px, size,
 };
+use log::error;
 use std::ops::Range;
 
 const INLINE_INPUT_LINE_HEIGHT_MULTIPLIER: f32 = 1.35;
@@ -818,7 +819,7 @@ impl<V: TextInputProvider + gpui::Render + EntityInputHandler> IntoElement for T
                 }
 
                 let line = if let Some(line) = prepaint.line.take() {
-                    line.paint(
+                    if let Err(error) = line.paint(
                         point(
                             prepaint.line_bounds.left() + prepaint.line_offset_x,
                             prepaint.line_bounds.top(),
@@ -828,8 +829,9 @@ impl<V: TextInputProvider + gpui::Render + EntityInputHandler> IntoElement for T
                         None,
                         window,
                         cx,
-                    )
-                    .expect("failed to paint text input text");
+                    ) {
+                        error!("failed to paint text input text: {}", error);
+                    }
                     Some(line)
                 } else {
                     None
