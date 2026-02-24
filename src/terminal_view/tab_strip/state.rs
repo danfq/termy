@@ -6,6 +6,18 @@ use super::layout::TabStripLayoutSnapshot;
 
 const TAB_TITLE_WIDTH_CACHE_MAX_ENTRIES: usize = 512;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TabDropMarkerSide {
+    Left,
+    Right,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct TabStripOverflowState {
+    pub(crate) left: bool,
+    pub(crate) right: bool,
+}
+
 #[derive(Clone, Debug, Default)]
 pub(crate) struct TabTitleWidthCache {
     font_family: String,

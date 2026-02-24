@@ -41,7 +41,6 @@ mod interaction;
 mod render;
 mod scrollbar;
 mod search;
-mod tab_chrome;
 mod tab_strip;
 mod tabs;
 mod titles;

@@ -1,5 +1,5 @@
-use super::super::tab_chrome;
-use super::super::tabs::{TabDropMarkerSide, TabStripOverflowState};
+use super::chrome;
+use super::state::{TabDropMarkerSide, TabStripOverflowState};
 use super::super::*;
 use super::layout::TabStripGeometry;
 use gpui::{Hsla, TextRun};
@@ -30,13 +30,13 @@ struct TabStripRenderState {
     geometry: TabStripGeometry,
     content_width: f32,
     overflow_state: TabStripOverflowState,
-    chrome_layout: tab_chrome::TabChromeLayout,
+    chrome_layout: chrome::TabChromeLayout,
 }
 
 struct TabItemRenderInput {
     index: usize,
     tab_width: f32,
-    tab_strokes: tab_chrome::TabStrokeRects,
+    tab_strokes: chrome::TabStrokeRects,
     label: String,
     is_active: bool,
     is_hovered: bool,
@@ -111,7 +111,7 @@ impl TerminalView {
     }
 
     fn resolve_tab_strip_palette(&self, colors: &TerminalColors, tabbar_bg: gpui::Rgba) -> TabStripPalette {
-        let tab_stroke_color = tab_chrome::resolve_tab_stroke_color(
+        let tab_stroke_color = chrome::resolve_tab_stroke_color(
             tabbar_bg,
             colors.foreground,
             TAB_STROKE_FOREGROUND_MIX,
@@ -185,9 +185,9 @@ impl TerminalView {
             .max(tab_strip_viewport_width);
         let overflow_state = self.tab_strip_overflow_state();
         let active_tab_index = (self.active_tab < self.tabs.len()).then_some(self.active_tab);
-        let chrome_layout = tab_chrome::compute_tab_chrome_layout(
+        let chrome_layout = chrome::compute_tab_chrome_layout(
             self.tabs.iter().map(|tab| tab.display_width),
-            tab_chrome::TabChromeInput {
+            chrome::TabChromeInput {
                 active_index: active_tab_index,
                 tabbar_height: TABBAR_HEIGHT,
                 tab_item_height: TAB_ITEM_HEIGHT,
@@ -205,7 +205,7 @@ impl TerminalView {
         }
     }
 
-    fn render_tab_stroke(stroke: tab_chrome::StrokeRect, color: gpui::Rgba) -> AnyElement {
+    fn render_tab_stroke(stroke: chrome::StrokeRect, color: gpui::Rgba) -> AnyElement {
         div()
             .absolute()
             .left(px(stroke.x))
@@ -273,7 +273,7 @@ impl TerminalView {
     }
 
     fn render_baseline_segments(
-        layout: &tab_chrome::TabChromeLayout,
+        layout: &chrome::TabChromeLayout,
         tab_stroke_color: gpui::Rgba,
     ) -> Vec<AnyElement> {
         let mut elements = Vec::with_capacity(layout.baseline_strokes.len() + 1);

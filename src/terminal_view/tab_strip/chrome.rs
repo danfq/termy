@@ -1,4 +1,4 @@
-use super::*;
+use super::constants::*;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct StrokeRect {
