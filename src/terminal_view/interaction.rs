@@ -9,6 +9,13 @@ enum QuitRequestTarget {
     WindowClose,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TerminalSelectionCharClass {
+    Whitespace,
+    Word,
+    Other,
+}
+
 impl TerminalView {
     fn command_palette_mode_for_action(action: CommandAction) -> Option<CommandPaletteMode> {
         match action {
@@ -368,6 +375,79 @@ impl TerminalView {
         });
 
         Some(line)
+    }
+
+    fn terminal_selection_char_class(c: char) -> TerminalSelectionCharClass {
+        if c.is_whitespace() {
+            TerminalSelectionCharClass::Whitespace
+        } else if c.is_alphanumeric() || c == '_' {
+            TerminalSelectionCharClass::Word
+        } else {
+            TerminalSelectionCharClass::Other
+        }
+    }
+
+    fn select_token_at_cell(&mut self, cell: CellPos) -> bool {
+        let Some(line) = self.row_text(cell.row) else {
+            return false;
+        };
+        if cell.col >= line.len() {
+            return false;
+        }
+
+        let class = Self::terminal_selection_char_class(line[cell.col]);
+        if class == TerminalSelectionCharClass::Whitespace {
+            let Some(last_non_whitespace) = line.iter().rposition(|c| !c.is_whitespace()) else {
+                return false;
+            };
+            if cell.col > last_non_whitespace {
+                return false;
+            }
+        }
+
+        let mut start_col = cell.col;
+        while start_col > 0
+            && Self::terminal_selection_char_class(line[start_col - 1]) == class
+        {
+            start_col -= 1;
+        }
+
+        let mut end_col = cell.col;
+        while end_col + 1 < line.len()
+            && Self::terminal_selection_char_class(line[end_col + 1]) == class
+        {
+            end_col += 1;
+        }
+
+        self.selection_anchor = Some(CellPos {
+            col: start_col,
+            row: cell.row,
+        });
+        self.selection_head = Some(CellPos {
+            col: end_col,
+            row: cell.row,
+        });
+        self.selection_dragging = false;
+        self.selection_moved = true;
+        true
+    }
+
+    fn select_line_at_row(&mut self, row: usize) -> bool {
+        let size = self.active_terminal().size();
+        let cols = size.cols as usize;
+        let rows = size.rows as usize;
+        if cols == 0 || row >= rows {
+            return false;
+        }
+
+        self.selection_anchor = Some(CellPos { col: 0, row });
+        self.selection_head = Some(CellPos {
+            col: cols.saturating_sub(1),
+            row,
+        });
+        self.selection_dragging = false;
+        self.selection_moved = true;
+        true
     }
 
     pub(super) fn link_at_cell(&self, cell: CellPos) -> Option<HoveredLink> {
@@ -1500,6 +1580,22 @@ impl TerminalView {
             cx.notify();
             return;
         };
+
+        if event.click_count >= 3 {
+            if self.select_line_at_row(cell.row) {
+                self.clear_hovered_link();
+                cx.notify();
+                return;
+            }
+        }
+
+        if event.click_count == 2 {
+            if self.select_token_at_cell(cell) {
+                self.clear_hovered_link();
+                cx.notify();
+                return;
+            }
+        }
 
         self.selection_anchor = Some(cell);
         self.selection_head = Some(cell);
