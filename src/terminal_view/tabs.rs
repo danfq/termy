@@ -365,9 +365,19 @@ impl TerminalView {
             return;
         }
 
+        let inherited_working_dir = self.tabs.get(self.active_tab).and_then(|tab| {
+            tab.terminal
+                .foreground_working_directory()
+                .map(|cwd| cwd.to_string_lossy().into_owned())
+                .or_else(|| tab.working_dir.clone())
+        });
+        let startup_working_dir = inherited_working_dir
+            .as_deref()
+            .or(self.configured_working_dir.as_deref());
+
         let terminal = Terminal::new(
             TerminalSize::default(),
-            self.configured_working_dir.as_deref(),
+            startup_working_dir,
             Some(self.event_wakeup_tx.clone()),
             Some(&self.tab_shell_integration),
             Some(&self.terminal_runtime),
@@ -375,13 +385,17 @@ impl TerminalView {
         .expect("Failed to create terminal tab");
 
         let predicted_prompt_cwd = Self::predicted_prompt_cwd(
-            self.configured_working_dir.as_deref(),
+            startup_working_dir,
             self.terminal_runtime.working_dir_fallback,
         );
         let predicted_title =
             Self::predicted_prompt_seed_title(&self.tab_title, predicted_prompt_cwd.as_deref());
 
-        self.tabs.push(TerminalTab::new(terminal, predicted_title));
+        self.tabs.push(TerminalTab::new(
+            terminal,
+            predicted_title,
+            startup_working_dir.map(|cwd| cwd.to_string()),
+        ));
         self.active_tab = self.tabs.len() - 1;
         self.refresh_tab_title(self.active_tab);
         self.renaming_tab = None;

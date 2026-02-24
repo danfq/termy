@@ -216,6 +216,7 @@ struct TerminalTab {
     manual_title: Option<String>,
     explicit_title: Option<String>,
     shell_title: Option<String>,
+    working_dir: Option<String>,
     pending_command_title: Option<String>,
     pending_command_token: u64,
     title: String,
@@ -224,18 +225,26 @@ struct TerminalTab {
 }
 
 impl TerminalTab {
-    fn new(terminal: Terminal, predicted_prompt_title: Option<String>) -> Self {
+    fn new(
+        terminal: Terminal,
+        predicted_prompt_title: Option<String>,
+        working_dir: Option<String>,
+    ) -> Self {
         let title = predicted_prompt_title
             .as_deref()
             .unwrap_or(DEFAULT_TAB_TITLE)
             .to_string();
         let display_width = TerminalView::tab_display_width_for_title(&title);
+        let working_dir = working_dir
+            .map(|cwd| cwd.trim().to_string())
+            .filter(|cwd| !cwd.is_empty());
 
         Self {
             terminal,
             manual_title: None,
             explicit_title: predicted_prompt_title,
             shell_title: None,
+            working_dir,
             pending_command_title: None,
             pending_command_token: 0,
             title,
@@ -1000,7 +1009,11 @@ impl TerminalView {
         .expect("Failed to create terminal");
 
         let mut view = Self {
-            tabs: vec![TerminalTab::new(terminal, startup_predicted_title)],
+            tabs: vec![TerminalTab::new(
+                terminal,
+                startup_predicted_title,
+                configured_working_dir.clone(),
+            )],
             active_tab: 0,
             renaming_tab: None,
             rename_input: InlineInputState::new(String::new()),

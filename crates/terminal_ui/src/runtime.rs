@@ -9,6 +9,12 @@ use alacritty_terminal::{
 use flume::{Receiver, Sender, unbounded};
 use gpui::{Keystroke, Pixels, px};
 #[cfg(not(target_os = "windows"))]
+use libc::pid_t;
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+use std::fs;
+#[cfg(not(target_os = "windows"))]
+use std::os::fd::AsRawFd;
+#[cfg(not(target_os = "windows"))]
 use std::path::Path;
 use std::{
     collections::HashMap,
@@ -272,6 +278,130 @@ fn default_working_directory_with_fallback(fallback: WorkingDirFallback) -> Opti
     env::current_dir().ok()
 }
 
+#[cfg(not(target_os = "windows"))]
+fn foreground_process_path(master_fd: i32, shell_pid: u32) -> Option<PathBuf> {
+    let mut pid = unsafe { libc::tcgetpgrp(master_fd) };
+    if pid < 0 {
+        pid = shell_pid as pid_t;
+    }
+
+    #[cfg(target_os = "macos")]
+    let cwd = macos_proc::cwd(pid)?;
+
+    #[cfg(not(target_os = "macos"))]
+    let cwd = {
+        #[cfg(target_os = "freebsd")]
+        let link_path = format!("/compat/linux/proc/{}/cwd", pid);
+        #[cfg(not(target_os = "freebsd"))]
+        let link_path = format!("/proc/{pid}/cwd");
+        fs::read_link(link_path).ok()?
+    };
+
+    cwd.is_dir().then_some(cwd)
+}
+
+#[cfg(target_os = "macos")]
+mod macos_proc {
+    use std::ffi::{CStr, CString};
+    use std::mem::{self, MaybeUninit};
+    use std::os::raw::{c_char, c_int, c_longlong, c_void};
+    use std::path::PathBuf;
+
+    pub fn cwd(pid: c_int) -> Option<PathBuf> {
+        let mut info = MaybeUninit::<sys::proc_vnodepathinfo>::uninit();
+        let info_ptr = info.as_mut_ptr() as *mut c_void;
+        let size = mem::size_of::<sys::proc_vnodepathinfo>() as c_int;
+
+        let c_str = unsafe {
+            let pidinfo_size = sys::proc_pidinfo(pid, sys::PROC_PIDVNODEPATHINFO, 0, info_ptr, size);
+            if pidinfo_size != size {
+                return None;
+            }
+            CStr::from_ptr(info.assume_init().pvi_cdir.vip_path.as_ptr())
+        };
+
+        let cwd = CString::from(c_str).into_string().ok()?;
+        Some(PathBuf::from(cwd))
+    }
+
+    #[allow(non_camel_case_types)]
+    mod sys {
+        use super::{c_char, c_int, c_longlong, c_void};
+
+        pub const PROC_PIDVNODEPATHINFO: c_int = 9;
+
+        type gid_t = c_int;
+        type off_t = c_longlong;
+        type uid_t = c_int;
+        type fsid_t = fsid;
+
+        #[repr(C)]
+        #[derive(Debug, Copy, Clone)]
+        pub struct fsid {
+            pub val: [i32; 2usize],
+        }
+
+        #[repr(C)]
+        #[derive(Debug, Copy, Clone)]
+        pub struct vinfo_stat {
+            pub vst_dev: u32,
+            pub vst_mode: u16,
+            pub vst_nlink: u16,
+            pub vst_ino: u64,
+            pub vst_uid: uid_t,
+            pub vst_gid: gid_t,
+            pub vst_atime: i64,
+            pub vst_atimensec: i64,
+            pub vst_mtime: i64,
+            pub vst_mtimensec: i64,
+            pub vst_ctime: i64,
+            pub vst_ctimensec: i64,
+            pub vst_birthtime: i64,
+            pub vst_birthtimensec: i64,
+            pub vst_size: off_t,
+            pub vst_blocks: i64,
+            pub vst_blksize: i32,
+            pub vst_flags: u32,
+            pub vst_gen: u32,
+            pub vst_rdev: u32,
+            pub vst_qspare: [i64; 2usize],
+        }
+
+        #[repr(C)]
+        #[derive(Debug, Copy, Clone)]
+        pub struct vnode_info {
+            pub vi_stat: vinfo_stat,
+            pub vi_type: c_int,
+            pub vi_pad: c_int,
+            pub vi_fsid: fsid_t,
+        }
+
+        #[repr(C)]
+        #[derive(Copy, Clone)]
+        pub struct vnode_info_path {
+            pub vip_vi: vnode_info,
+            pub vip_path: [c_char; 1024usize],
+        }
+
+        #[repr(C)]
+        #[derive(Copy, Clone)]
+        pub struct proc_vnodepathinfo {
+            pub pvi_cdir: vnode_info_path,
+            pub pvi_rdir: vnode_info_path,
+        }
+
+        unsafe extern "C" {
+            pub fn proc_pidinfo(
+                pid: c_int,
+                flavor: c_int,
+                arg: u64,
+                buffer: *mut c_void,
+                buffersize: c_int,
+            ) -> c_int;
+        }
+    }
+}
+
 /// Events sent from the terminal to the view
 #[derive(Debug, Clone)]
 pub enum TerminalEvent {
@@ -404,6 +534,11 @@ pub struct Terminal {
     size: TerminalSize,
     /// Tracks whether a wakeup event is already queued.
     wakeup_queued: Arc<AtomicBool>,
+    /// PID of the initial shell process.
+    shell_pid: u32,
+    /// PTY master file descriptor used to query the foreground process cwd.
+    #[cfg(not(target_os = "windows"))]
+    master_fd: i32,
 }
 
 impl Terminal {
@@ -462,6 +597,16 @@ impl Terminal {
         // Create PTY
         let window_id = 0;
         let pty = tty::new(&pty_options, size.into(), window_id)?;
+        #[cfg(not(target_os = "windows"))]
+        let shell_pid = pty.child().id();
+        #[cfg(not(target_os = "windows"))]
+        let master_fd = pty.file().as_raw_fd();
+        #[cfg(target_os = "windows")]
+        let shell_pid = pty
+            .child_watcher()
+            .pid()
+            .map(|pid| pid.get())
+            .unwrap_or(0);
 
         // Create and spawn the event loop
         let event_loop = EventLoop::new(term.clone(), listener, pty, false, false)?;
@@ -474,6 +619,9 @@ impl Terminal {
             events_rx,
             size,
             wakeup_queued,
+            shell_pid,
+            #[cfg(not(target_os = "windows"))]
+            master_fd,
         })
     }
 
@@ -498,6 +646,18 @@ impl Terminal {
     /// Get the current terminal size
     pub fn size(&self) -> TerminalSize {
         self.size
+    }
+
+    /// Best-effort foreground process cwd for this terminal session.
+    pub fn foreground_working_directory(&self) -> Option<PathBuf> {
+        #[cfg(not(target_os = "windows"))]
+        {
+            foreground_process_path(self.master_fd, self.shell_pid)
+        }
+        #[cfg(target_os = "windows")]
+        {
+            None
+        }
     }
 
     /// Process pending events and return true if terminal content changed

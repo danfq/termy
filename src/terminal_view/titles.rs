@@ -86,6 +86,24 @@ impl TerminalView {
             .replace("{command}", command.unwrap_or(""))
     }
 
+    pub(super) fn prompt_cwd_payload_from_explicit_title(
+        title: &str,
+        explicit_prefix: &str,
+    ) -> Option<String> {
+        let prefix = explicit_prefix.trim();
+        if prefix.is_empty() {
+            return None;
+        }
+
+        let payload = title.trim().strip_prefix(prefix)?.trim();
+        let prompt = payload.strip_prefix("prompt:")?.trim();
+        if prompt.is_empty() {
+            return None;
+        }
+
+        Some(prompt.to_string())
+    }
+
     pub(super) fn should_seed_predicted_prompt_title(tab_title: &TabTitleConfig) -> bool {
         tab_title
             .priority
@@ -273,6 +291,13 @@ impl TerminalView {
             return false;
         }
 
+        if let Some(prompt_cwd) = Self::prompt_cwd_payload_from_explicit_title(
+            title,
+            &self.tab_title.explicit_prefix,
+        ) {
+            self.tabs[index].working_dir = Some(prompt_cwd);
+        }
+
         if let Some(explicit_payload) = self.parse_explicit_title(title) {
             return match explicit_payload {
                 ExplicitTitlePayload::Prompt(prompt_title) => {
@@ -400,5 +425,28 @@ mod tests {
             TerminalView::format_tab_label_for_render(title, 8),
             "cargo test --workspace --all-features"
         );
+    }
+
+    #[test]
+    fn prompt_cwd_payload_from_explicit_title_extracts_prompt_payload() {
+        let cwd = TerminalView::prompt_cwd_payload_from_explicit_title(
+            "termy:tab:prompt:~/projects/termy",
+            "termy:tab:",
+        );
+        assert_eq!(cwd.as_deref(), Some("~/projects/termy"));
+    }
+
+    #[test]
+    fn prompt_cwd_payload_from_explicit_title_ignores_non_prompt_payloads() {
+        let command = TerminalView::prompt_cwd_payload_from_explicit_title(
+            "termy:tab:command:cargo test",
+            "termy:tab:",
+        );
+        let plain_title = TerminalView::prompt_cwd_payload_from_explicit_title(
+            "termy:tab:title:Deploy",
+            "termy:tab:",
+        );
+        assert!(command.is_none());
+        assert!(plain_title.is_none());
     }
 }
