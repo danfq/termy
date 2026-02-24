@@ -12,8 +12,33 @@ pub(super) struct TabStripOverflowState {
     pub(super) right: bool,
 }
 
+impl TabStripGeometry {
+    pub(super) fn tabs_viewport_end_x(self) -> f32 {
+        self.row_start_x + self.tabs_viewport_width
+    }
+
+    pub(super) fn action_rail_end_x(self) -> f32 {
+        self.action_rail_start_x + self.action_rail_width
+    }
+
+    pub(super) fn contains_tabs_viewport_x(self, x: f32) -> bool {
+        x >= self.row_start_x && x <= self.tabs_viewport_end_x()
+    }
+
+    pub(super) fn contains_action_rail_x(self, x: f32) -> bool {
+        x >= self.action_rail_start_x && x <= self.action_rail_end_x()
+    }
+
+    pub(super) fn new_tab_button_contains(self, x: f32, y: f32) -> bool {
+        x >= self.button_start_x
+            && x <= self.button_end_x
+            && y >= self.button_start_y
+            && y <= self.button_end_y
+    }
+}
+
 impl TerminalView {
-    fn tab_strip_origin_x(&self) -> f32 {
+    pub(super) fn titlebar_left_padding_for_platform() -> f32 {
         if cfg!(target_os = "macos") {
             TOP_STRIP_MACOS_TRAFFIC_LIGHT_PADDING
         } else {
@@ -73,12 +98,40 @@ impl TerminalView {
         .detach();
     }
 
-    pub(super) fn tab_strip_drag_viewport_width(&self, window: &Window) -> f32 {
-        let viewport_width: f32 = window.viewport_size().width.into();
-        let tabs_row_width =
-            (viewport_width - self.tab_strip_origin_x() - TOP_STRIP_SIDE_PADDING).max(0.0);
+    pub(super) fn tab_strip_geometry_for_viewport_width(viewport_width: f32) -> TabStripGeometry {
+        let row_start_x = Self::titlebar_left_padding_for_platform();
+        let row_width = (viewport_width - row_start_x - TOP_STRIP_SIDE_PADDING).max(0.0);
+        let action_rail_width = TABBAR_ACTION_RAIL_WIDTH.min(row_width);
+        let tabs_viewport_width = (row_width - action_rail_width).max(0.0);
+        let action_rail_start_x = row_start_x + tabs_viewport_width;
+        let button_start_x =
+            action_rail_start_x + ((action_rail_width - TABBAR_NEW_TAB_BUTTON_SIZE) * 0.5).max(0.0);
+        let button_start_y = TOP_STRIP_CONTENT_OFFSET_Y
+            + ((TABBAR_HEIGHT - TABBAR_NEW_TAB_BUTTON_SIZE) * 0.5).max(0.0);
 
-        (tabs_row_width - TABBAR_ACTION_RAIL_WIDTH).max(0.0)
+        TabStripGeometry {
+            row_start_x,
+            row_width,
+            tabs_viewport_width,
+            action_rail_start_x,
+            action_rail_width,
+            button_start_x,
+            button_end_x: button_start_x + TABBAR_NEW_TAB_BUTTON_SIZE,
+            button_start_y,
+            button_end_y: button_start_y + TABBAR_NEW_TAB_BUTTON_SIZE,
+        }
+    }
+
+    pub(super) fn tab_strip_geometry(&self, window: &Window) -> TabStripGeometry {
+        let viewport_width: f32 = window.viewport_size().width.into();
+        Self::tab_strip_geometry_for_viewport_width(viewport_width)
+    }
+
+    fn tab_strip_pointer_x_from_window_x_for_geometry(
+        window_x: f32,
+        geometry: TabStripGeometry,
+    ) -> f32 {
+        (window_x - geometry.row_start_x).clamp(0.0, geometry.tabs_viewport_width)
     }
 
     pub(super) fn tab_strip_pointer_x_from_window_x(
@@ -86,10 +139,10 @@ impl TerminalView {
         window: &Window,
         window_x: Pixels,
     ) -> (f32, f32) {
-        let viewport_width = self.tab_strip_drag_viewport_width(window);
+        let geometry = self.tab_strip_geometry(window);
         let pointer_x =
-            (Into::<f32>::into(window_x) - self.tab_strip_origin_x()).clamp(0.0, viewport_width);
-        (pointer_x, viewport_width)
+            Self::tab_strip_pointer_x_from_window_x_for_geometry(window_x.into(), geometry);
+        (pointer_x, geometry.tabs_viewport_width)
     }
 
     fn tab_strip_overflow_state_for_scroll(
@@ -162,6 +215,28 @@ impl TerminalView {
             changed = true;
         }
 
+        changed
+    }
+
+    fn bump_tab_layout_revision(&mut self) {
+        self.tab_layout_revision = self.tab_layout_revision.wrapping_add(1);
+    }
+
+    pub(super) fn sync_tab_display_widths_for_viewport_if_needed(
+        &mut self,
+        viewport_width: f32,
+    ) -> bool {
+        let clamped_viewport = viewport_width.max(0.0);
+        let viewport_unchanged =
+            (self.tab_layout_last_synced_viewport_width - clamped_viewport).abs() <= f32::EPSILON;
+        let revision_unchanged = self.tab_layout_last_synced_revision == self.tab_layout_revision;
+        if viewport_unchanged && revision_unchanged {
+            return false;
+        }
+
+        let changed = self.sync_tab_display_widths_for_viewport(clamped_viewport);
+        self.tab_layout_last_synced_viewport_width = clamped_viewport;
+        self.tab_layout_last_synced_revision = self.tab_layout_revision;
         changed
     }
 
@@ -341,7 +416,7 @@ impl TerminalView {
         self.tab_drag_pointer_x = Some(pointer_x);
         self.tab_drag_viewport_width = viewport_width.max(0.0);
         let widths_changed =
-            self.sync_tab_display_widths_for_viewport(self.tab_drag_viewport_width);
+            self.sync_tab_display_widths_for_viewport_if_needed(self.tab_drag_viewport_width);
 
         let scrolled = self.auto_scroll_tab_strip_during_drag(pointer_x, viewport_width);
         let marker_changed = self.update_tab_drag_marker(pointer_x, cx);
@@ -429,6 +504,7 @@ impl TerminalView {
         self.tabs.push(TerminalTab::new(terminal, predicted_title));
         self.active_tab = self.tabs.len() - 1;
         self.refresh_tab_title(self.active_tab);
+        self.bump_tab_layout_revision();
         self.renaming_tab = None;
         self.rename_input.clear();
         self.inline_input_selecting = false;
@@ -446,6 +522,7 @@ impl TerminalView {
         }
 
         self.tabs.remove(index);
+        self.bump_tab_layout_revision();
 
         if self.active_tab > index {
             self.active_tab -= 1;
@@ -815,5 +892,46 @@ mod tests {
                 right: true,
             }
         );
+    }
+
+    #[test]
+    fn tab_strip_geometry_positions_action_rail_and_button_bounds() {
+        let geometry = TerminalView::tab_strip_geometry_for_viewport_width(1280.0);
+        assert!(geometry.row_start_x > 0.0);
+        assert!(geometry.tabs_viewport_width > 0.0);
+        assert_float_eq(geometry.tabs_viewport_end_x(), geometry.action_rail_start_x);
+        assert_float_eq(
+            geometry.action_rail_end_x(),
+            geometry.action_rail_start_x + geometry.action_rail_width,
+        );
+        assert!(geometry.button_start_x >= geometry.action_rail_start_x);
+        assert!(geometry.button_end_x <= geometry.action_rail_end_x());
+        assert!(geometry.button_start_y >= TOP_STRIP_CONTENT_OFFSET_Y);
+    }
+
+    #[test]
+    fn tab_strip_pointer_transform_accounts_for_non_zero_origin() {
+        let geometry = TerminalView::tab_strip_geometry_for_viewport_width(1280.0);
+        assert_float_eq(
+            TerminalView::tab_strip_pointer_x_from_window_x_for_geometry(
+                geometry.row_start_x + 24.0,
+                geometry,
+            ),
+            24.0,
+        );
+        assert_float_eq(
+            TerminalView::tab_strip_pointer_x_from_window_x_for_geometry(0.0, geometry),
+            0.0,
+        );
+    }
+
+    #[test]
+    fn tab_strip_geometry_detects_new_tab_button_hit_bounds() {
+        let geometry = TerminalView::tab_strip_geometry_for_viewport_width(960.0);
+        let button_center_x = (geometry.button_start_x + geometry.button_end_x) * 0.5;
+        let button_center_y = (geometry.button_start_y + geometry.button_end_y) * 0.5;
+        assert!(geometry.contains_action_rail_x(button_center_x));
+        assert!(geometry.new_tab_button_contains(button_center_x, button_center_y));
+        assert!(!geometry.new_tab_button_contains(geometry.button_start_x - 1.0, button_center_y));
     }
 }

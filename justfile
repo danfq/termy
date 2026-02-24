@@ -13,8 +13,8 @@ build:
 # Format only selected files to keep feature diffs reviewable.
 # Example:
 # just fmt src/main.rs src/terminal_view/render.rs
+[positional-arguments]
 fmt *paths:
-    set -- {{ paths }}; \
     if [ "$#" -eq 0 ]; then \
       echo "Usage: just fmt <path> [<path> ...]"; \
       echo "Example: just fmt src/main.rs src/terminal_view/render.rs"; \

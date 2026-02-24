@@ -1047,8 +1047,7 @@ impl TerminalView {
         let cli_source = Self::find_cli_binary()?;
 
         // Try ~/.local/bin first (user-writable), fall back to /usr/local/bin
-        let home_bin = dirs::home_dir()
-            .map(|h| h.join(".local").join("bin").join("termy"));
+        let home_bin = dirs::home_dir().map(|h| h.join(".local").join("bin").join("termy"));
 
         let using_fallback = home_bin.is_none();
         let target = if let Some(ref local_bin) = home_bin {
@@ -1075,11 +1074,7 @@ impl TerminalView {
                             parent.display()
                         )
                     } else {
-                        format!(
-                            "Failed to create directory {}: {}",
-                            parent.display(),
-                            e
-                        )
+                        format!("Failed to create directory {}: {}", parent.display(), e)
                     }
                 })?;
             }
@@ -1098,13 +1093,8 @@ impl TerminalView {
         }
 
         // Create symlink
-        symlink(&cli_source, &target).map_err(|e| {
-            format!(
-                "Failed to create symlink at {}: {}",
-                target.display(),
-                e
-            )
-        })?;
+        symlink(&cli_source, &target)
+            .map_err(|e| format!("Failed to create symlink at {}: {}", target.display(), e))?;
 
         Ok(target)
     }
@@ -1184,7 +1174,10 @@ impl TerminalView {
             }
         }
 
-        Err("CLI binary not found. Make sure to build it with: cargo build -p termy_cli".to_string())
+        Err(
+            "CLI binary not found. Make sure to build it with: cargo build -p termy_cli"
+                .to_string(),
+        )
     }
 
     pub(super) fn handle_toggle_command_palette_action(
@@ -1602,14 +1595,6 @@ impl TerminalView {
         cx.notify();
     }
 
-    fn titlebar_left_padding_for_platform() -> f32 {
-        if cfg!(target_os = "macos") {
-            TOP_STRIP_MACOS_TRAFFIC_LIGHT_PADDING
-        } else {
-            TOP_STRIP_SIDE_PADDING
-        }
-    }
-
     fn unified_titlebar_tab_shell_hit_test(
         pointer_x: f32,
         pointer_y: f32,
@@ -1635,13 +1620,10 @@ impl TerminalView {
     }
 
     fn unified_titlebar_tab_interactive_hit_test(&self, x: f32, y: f32, window: &Window) -> bool {
-        let row_start_x = Self::titlebar_left_padding_for_platform();
-        let viewport_width: f32 = window.viewport_size().width.into();
-        let tabs_viewport_width = self.tab_strip_drag_viewport_width(window);
-        let tabs_viewport_end_x = row_start_x + tabs_viewport_width;
+        let geometry = self.tab_strip_geometry(window);
 
-        if x >= row_start_x && x <= tabs_viewport_end_x {
-            let pointer_x = x - row_start_x;
+        if geometry.contains_tabs_viewport_x(x) {
+            let pointer_x = (x - geometry.row_start_x).clamp(0.0, geometry.tabs_viewport_width);
             let scroll_offset_x: f32 = self.tab_strip_scroll_handle.offset().x.into();
             if Self::unified_titlebar_tab_shell_hit_test(
                 pointer_x,
@@ -1653,22 +1635,27 @@ impl TerminalView {
             }
         }
 
-        let row_width = (viewport_width - row_start_x - TOP_STRIP_SIDE_PADDING).max(0.0);
-        let action_rail_width = TABBAR_ACTION_RAIL_WIDTH.min(row_width);
-        let action_rail_start_x = tabs_viewport_end_x;
-        let action_rail_end_x = action_rail_start_x + action_rail_width;
-        if x < action_rail_start_x || x > action_rail_end_x {
+        if !geometry.contains_action_rail_x(x) {
             return false;
         }
 
-        let button_start_x =
-            action_rail_start_x + ((action_rail_width - TABBAR_NEW_TAB_BUTTON_SIZE) * 0.5).max(0.0);
-        let button_end_x = button_start_x + TABBAR_NEW_TAB_BUTTON_SIZE;
-        let button_start_y = TOP_STRIP_CONTENT_OFFSET_Y
-            + ((TABBAR_HEIGHT - TABBAR_NEW_TAB_BUTTON_SIZE) * 0.5).max(0.0);
-        let button_end_y = button_start_y + TABBAR_NEW_TAB_BUTTON_SIZE;
+        geometry.new_tab_button_contains(x, y)
+    }
 
-        x >= button_start_x && x <= button_end_x && y >= button_start_y && y <= button_end_y
+    fn arm_titlebar_window_move(&mut self) {
+        self.titlebar_move_armed = true;
+    }
+
+    pub(super) fn disarm_titlebar_window_move(&mut self) {
+        self.titlebar_move_armed = false;
+    }
+
+    fn titlebar_move_armed_after_mouse_down(interactive_hit: bool, click_count: usize) -> bool {
+        !interactive_hit && click_count != 2
+    }
+
+    fn titlebar_move_armed_after_mouse_up() -> bool {
+        false
     }
 
     pub(super) fn handle_unified_titlebar_mouse_down(
@@ -1683,13 +1670,13 @@ impl TerminalView {
 
         let x: f32 = event.position.x.into();
         let y: f32 = event.position.y.into();
-        if self.unified_titlebar_tab_interactive_hit_test(x, y, window) {
-            self.titlebar_move_armed = false;
-            return;
+        let interactive_hit = self.unified_titlebar_tab_interactive_hit_test(x, y, window);
+        let next_move_armed =
+            Self::titlebar_move_armed_after_mouse_down(interactive_hit, event.click_count);
+        if !next_move_armed {
+            self.disarm_titlebar_window_move();
         }
-
-        if event.click_count == 2 {
-            self.titlebar_move_armed = false;
+        if !interactive_hit && event.click_count == 2 {
             #[cfg(target_os = "macos")]
             window.titlebar_double_click();
             #[cfg(not(target_os = "macos"))]
@@ -1698,8 +1685,10 @@ impl TerminalView {
             return;
         }
 
-        self.titlebar_move_armed = true;
-        cx.stop_propagation();
+        if next_move_armed {
+            self.arm_titlebar_window_move();
+            cx.stop_propagation();
+        }
     }
 
     pub(super) fn handle_unified_titlebar_mouse_up(
@@ -1712,7 +1701,7 @@ impl TerminalView {
             return;
         }
 
-        self.titlebar_move_armed = false;
+        self.titlebar_move_armed = Self::titlebar_move_armed_after_mouse_up();
         cx.stop_propagation();
     }
 
@@ -1729,7 +1718,7 @@ impl TerminalView {
             return false;
         }
 
-        self.titlebar_move_armed = false;
+        self.disarm_titlebar_window_move();
         window.start_window_move();
         true
     }
@@ -1795,10 +1784,6 @@ impl TerminalView {
         cx.notify();
     }
 
-    pub(super) fn tab_bar_height(&self) -> f32 {
-        0.0
-    }
-
     pub(super) fn titlebar_height(&self) -> f32 {
         TITLEBAR_HEIGHT.max(TABBAR_HEIGHT)
     }
@@ -1812,7 +1797,7 @@ impl TerminalView {
     }
 
     pub(super) fn chrome_height(&self) -> f32 {
-        self.titlebar_height() + self.tab_bar_height() + self.update_banner_height()
+        self.titlebar_height() + self.update_banner_height()
     }
 }
 
@@ -1894,14 +1879,6 @@ mod tests {
     }
 
     #[test]
-    fn chrome_height_uses_single_row_across_platforms() {
-        let titlebar_height = TITLEBAR_HEIGHT.max(TABBAR_HEIGHT);
-        let tab_bar_height = 0.0;
-        assert_eq!(titlebar_height, TITLEBAR_HEIGHT.max(TABBAR_HEIGHT));
-        assert_eq!(tab_bar_height, 0.0);
-    }
-
-    #[test]
     fn titlebar_window_move_requires_armed_and_dragging() {
         assert!(!TerminalView::should_start_titlebar_window_move(
             false, true, false
@@ -1919,6 +1896,20 @@ mod tests {
         assert!(!TerminalView::should_start_titlebar_window_move(
             true, true, true
         ));
+    }
+
+    #[test]
+    fn titlebar_move_arm_state_transitions_on_mouse_down() {
+        assert!(!TerminalView::titlebar_move_armed_after_mouse_down(true, 1));
+        assert!(!TerminalView::titlebar_move_armed_after_mouse_down(
+            false, 2
+        ));
+        assert!(TerminalView::titlebar_move_armed_after_mouse_down(false, 1));
+    }
+
+    #[test]
+    fn titlebar_move_arm_state_transitions_on_mouse_up() {
+        assert!(!TerminalView::titlebar_move_armed_after_mouse_up());
     }
 
     #[test]

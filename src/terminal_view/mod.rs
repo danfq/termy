@@ -13,8 +13,7 @@ use gpui::{
     Focusable, Font, FontWeight, InteractiveElement, IntoElement, KeyDownEvent, MouseButton,
     MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Render, ScrollHandle,
     ScrollWheelEvent, SharedString, Size, StatefulInteractiveElement, Styled, TouchPhase,
-    UniformListScrollHandle, WeakEntity, Window, WindowBackgroundAppearance,
-    div, point, px,
+    UniformListScrollHandle, WeakEntity, Window, WindowBackgroundAppearance, div, point, px,
 };
 use std::{
     env, fs,
@@ -178,6 +177,19 @@ struct TerminalScrollbarDragState {
 struct TabDragState {
     source_index: usize,
     drop_slot: Option<usize>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(super) struct TabStripGeometry {
+    pub(super) row_start_x: f32,
+    pub(super) row_width: f32,
+    pub(super) tabs_viewport_width: f32,
+    pub(super) action_rail_start_x: f32,
+    pub(super) action_rail_width: f32,
+    pub(super) button_start_x: f32,
+    pub(super) button_end_x: f32,
+    pub(super) button_start_y: f32,
+    pub(super) button_end_y: f32,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -554,6 +566,9 @@ pub struct TerminalView {
     tab_drag_pointer_x: Option<f32>,
     tab_drag_viewport_width: f32,
     tab_drag_autoscroll_animating: bool,
+    tab_layout_revision: u64,
+    tab_layout_last_synced_revision: u64,
+    tab_layout_last_synced_viewport_width: f32,
     titlebar_move_armed: bool,
     terminal_scrollbar_visibility: TerminalScrollbarVisibility,
     terminal_scrollbar_style: TerminalScrollbarStyle,
@@ -1040,6 +1055,9 @@ impl TerminalView {
             tab_drag_pointer_x: None,
             tab_drag_viewport_width: 0.0,
             tab_drag_autoscroll_animating: false,
+            tab_layout_revision: 0,
+            tab_layout_last_synced_revision: 0,
+            tab_layout_last_synced_viewport_width: f32::NAN,
             titlebar_move_armed: false,
             terminal_scrollbar_visibility: config.terminal_scrollbar_visibility,
             terminal_scrollbar_style: config.terminal_scrollbar_style,
