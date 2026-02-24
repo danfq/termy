@@ -71,9 +71,9 @@ impl TabStripGeometry {
 
     pub(crate) fn new_tab_button_contains(self, x: f32, y: f32) -> bool {
         x >= self.button_start_x
-            && x <= self.button_end_x
+            && x < self.button_end_x
             && y >= self.button_start_y
-            && y <= self.button_end_y
+            && y < self.button_end_y
     }
 }
 
@@ -100,17 +100,19 @@ impl TerminalView {
         let tabs_viewport_width = (row_width - action_rail_width - gutter_width).max(0.0);
         let gutter_start_x = row_start_x + tabs_viewport_width;
         let action_rail_start_x = gutter_start_x + gutter_width;
+        let button_size = TABBAR_NEW_TAB_BUTTON_SIZE.min(action_rail_width);
         // Optical balance: center the button against the terminal edge lane (rail + trailing inset),
         // then clamp to keep the button fully inside the interactive action rail.
         let button_center_x =
             action_rail_start_x + (action_rail_width * 0.5) + (right_inset_width * 0.5);
-        let max_button_start_x = (action_rail_start_x + action_rail_width
-            - TABBAR_NEW_TAB_BUTTON_SIZE)
-            .max(action_rail_start_x);
-        let button_start_x = (button_center_x - (TABBAR_NEW_TAB_BUTTON_SIZE * 0.5))
-            .clamp(action_rail_start_x, max_button_start_x);
-        let button_start_y = TOP_STRIP_CONTENT_OFFSET_Y
-            + ((TABBAR_HEIGHT - TABBAR_NEW_TAB_BUTTON_SIZE) * 0.5).max(0.0);
+        let max_button_start_x =
+            (action_rail_start_x + action_rail_width - button_size).max(action_rail_start_x);
+        let button_start_x =
+            (button_center_x - (button_size * 0.5)).clamp(action_rail_start_x, max_button_start_x);
+        let button_start_y =
+            TOP_STRIP_CONTENT_OFFSET_Y + ((TABBAR_HEIGHT - button_size) * 0.5).max(0.0);
+        let button_end_x = button_start_x + button_size;
+        let button_end_y = button_start_y + button_size;
 
         let geometry = TabStripGeometry {
             window_width,
@@ -125,9 +127,9 @@ impl TerminalView {
             action_rail_start_x,
             action_rail_width,
             button_start_x,
-            button_end_x: button_start_x + TABBAR_NEW_TAB_BUTTON_SIZE,
+            button_end_x,
             button_start_y,
-            button_end_y: button_start_y + TABBAR_NEW_TAB_BUTTON_SIZE,
+            button_end_y,
         };
 
         debug_assert!(
@@ -287,6 +289,21 @@ mod tests {
     fn button_is_always_inside_rail() {
         let snapshot = TerminalView::tab_strip_layout_for_viewport_width(960.0);
         let geometry = snapshot.geometry;
+        assert!(geometry.button_start_x >= geometry.action_rail_start_x);
+        assert!(geometry.button_end_x <= geometry.action_rail_end_x());
+    }
+
+    #[test]
+    fn button_shrinks_to_narrow_action_rail() {
+        let viewport_width =
+            TerminalView::titlebar_left_padding_for_platform() + TOP_STRIP_SIDE_PADDING + 8.0;
+        let snapshot = TerminalView::tab_strip_layout_for_viewport_width(viewport_width);
+        let geometry = snapshot.geometry;
+        assert_float_eq(geometry.action_rail_width, 8.0);
+        assert_float_eq(
+            geometry.button_end_x - geometry.button_start_x,
+            geometry.action_rail_width,
+        );
         assert!(geometry.button_start_x >= geometry.action_rail_start_x);
         assert!(geometry.button_end_x <= geometry.action_rail_end_x());
     }

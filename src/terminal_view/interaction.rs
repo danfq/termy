@@ -1650,8 +1650,12 @@ impl TerminalView {
         cx.notify();
     }
 
-    pub(super) fn titlebar_height(&self) -> f32 {
-        TITLEBAR_HEIGHT.max(TABBAR_HEIGHT)
+    pub(super) const fn titlebar_height() -> f32 {
+        if TITLEBAR_HEIGHT > TABBAR_HEIGHT {
+            TITLEBAR_HEIGHT
+        } else {
+            TABBAR_HEIGHT
+        }
     }
 
     pub(super) fn update_banner_height(&self) -> f32 {
@@ -1663,7 +1667,7 @@ impl TerminalView {
     }
 
     pub(super) fn chrome_height(&self) -> f32 {
-        self.titlebar_height() + self.update_banner_height()
+        Self::titlebar_height() + self.update_banner_height()
     }
 }
 

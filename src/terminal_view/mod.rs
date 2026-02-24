@@ -1100,6 +1100,7 @@ impl TerminalView {
         self.cell_size = None;
         if self.font_family != previous_font_family || self.font_size != previous_font_size {
             self.clear_tab_title_width_cache();
+            self.mark_tab_strip_layout_dirty();
         }
         self.background_opacity = config.background_opacity;
         self.background_blur = config.background_blur;
@@ -1244,11 +1245,12 @@ impl TerminalView {
         should_redraw
     }
 
-    fn clear_selection(&mut self) {
-        self.selection_anchor = None;
-        self.selection_head = None;
-        self.selection_dragging = false;
-        self.selection_moved = false;
+    fn clear_selection(&mut self) -> bool {
+        let anchor_changed = self.selection_anchor.take().is_some();
+        let head_changed = self.selection_head.take().is_some();
+        let dragging_changed = std::mem::replace(&mut self.selection_dragging, false);
+        let moved_changed = std::mem::replace(&mut self.selection_moved, false);
+        anchor_changed || head_changed || dragging_changed || moved_changed
     }
 
     fn clear_hovered_link(&mut self) -> bool {

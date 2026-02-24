@@ -482,7 +482,7 @@ impl Render for TerminalView {
         });
 
         let focus_handle = self.focus_handle.clone();
-        let titlebar_height = self.titlebar_height();
+        let titlebar_height = Self::titlebar_height();
         let mut terminal_surface_bg = colors.background;
         terminal_surface_bg.a = self.scaled_background_alpha(terminal_surface_bg.a);
         let titlebar_bg = terminal_surface_bg;

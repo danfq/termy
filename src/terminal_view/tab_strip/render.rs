@@ -866,13 +866,25 @@ impl TerminalView {
         hover_border: gpui::Rgba,
         text: gpui::Rgba,
         hover_text: gpui::Rgba,
+        button_size: f32,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        if button_size <= 0.0 {
+            return div()
+                .id("tabbar-new-tab")
+                .w(px(0.0))
+                .h(px(0.0))
+                .into_any_element();
+        }
+
+        let corner_radius = TABBAR_NEW_TAB_BUTTON_RADIUS.min(button_size * 0.5);
+        let icon_size = TABBAR_NEW_TAB_ICON_SIZE.min(button_size);
+
         div()
             .id("tabbar-new-tab")
-            .w(px(TABBAR_NEW_TAB_BUTTON_SIZE))
-            .h(px(TABBAR_NEW_TAB_BUTTON_SIZE))
-            .rounded(px(TABBAR_NEW_TAB_BUTTON_RADIUS))
+            .w(px(button_size))
+            .h(px(button_size))
+            .rounded(px(corner_radius))
             .bg(bg)
             .border_1()
             .border_color(border)
@@ -898,7 +910,7 @@ impl TerminalView {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .text_size(px(TABBAR_NEW_TAB_ICON_SIZE))
+                    .text_size(px(icon_size))
                     .font_weight(FontWeight::MEDIUM)
                     .mt(px(TABBAR_NEW_TAB_ICON_BASELINE_NUDGE_Y))
                     .child("+"),
@@ -916,6 +928,8 @@ impl TerminalView {
             (state.geometry.button_start_x - state.geometry.action_rail_start_x).max(0.0);
         let tabbar_new_tab_top =
             (state.geometry.button_start_y - TOP_STRIP_CONTENT_OFFSET_Y).max(0.0);
+        let tabbar_new_tab_size =
+            (state.geometry.button_end_x - state.geometry.button_start_x).max(0.0);
         let tab_baseline_y = state.chrome_layout.baseline_y;
 
         div()
@@ -940,6 +954,7 @@ impl TerminalView {
                         palette.tabbar_new_tab_hover_border,
                         palette.tabbar_new_tab_text,
                         palette.tabbar_new_tab_hover_text,
+                        tabbar_new_tab_size,
                         cx,
                     )),
             )

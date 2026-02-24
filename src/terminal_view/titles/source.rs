@@ -15,9 +15,34 @@ impl TerminalView {
         cwd: Option<&str>,
         command: Option<&str>,
     ) -> String {
-        template
-            .replace("{cwd}", cwd.unwrap_or(""))
-            .replace("{command}", command.unwrap_or(""))
+        const CWD_TOKEN: &str = "{cwd}";
+        const COMMAND_TOKEN: &str = "{command}";
+
+        let cwd = cwd.unwrap_or("");
+        let command = command.unwrap_or("");
+        let mut remaining = template;
+        let mut resolved = String::with_capacity(template.len());
+
+        while let Some(open_brace_idx) = remaining.find('{') {
+            resolved.push_str(&remaining[..open_brace_idx]);
+            remaining = &remaining[open_brace_idx..];
+            if let Some(tail) = remaining.strip_prefix(CWD_TOKEN) {
+                resolved.push_str(cwd);
+                remaining = tail;
+                continue;
+            }
+            if let Some(tail) = remaining.strip_prefix(COMMAND_TOKEN) {
+                resolved.push_str(command);
+                remaining = tail;
+                continue;
+            }
+
+            resolved.push('{');
+            remaining = &remaining['{'.len_utf8()..];
+        }
+
+        resolved.push_str(remaining);
+        resolved
     }
 
     pub(crate) fn should_seed_predicted_prompt_title(tab_title: &TabTitleConfig) -> bool {
@@ -219,5 +244,22 @@ mod tests {
 
         let title = TerminalView::predicted_prompt_seed_title(&config, None);
         assert!(title.is_none());
+    }
+
+    #[test]
+    fn resolve_template_replaces_known_tokens_in_single_pass() {
+        let resolved = TerminalView::resolve_template(
+            "cwd={cwd} command={command}",
+            Some("{command}"),
+            Some("{cwd}"),
+        );
+        assert_eq!(resolved, "cwd={command} command={cwd}");
+    }
+
+    #[test]
+    fn resolve_template_leaves_unknown_brace_tokens_unchanged() {
+        let resolved =
+            TerminalView::resolve_template("start {unknown} end", Some("cwd"), Some("cmd"));
+        assert_eq!(resolved, "start {unknown} end");
     }
 }

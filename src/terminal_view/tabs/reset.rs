@@ -46,8 +46,8 @@ impl TerminalView {
         let rename_changed = self.reset_tab_rename_state();
         let hover_changed = self.clear_tab_hover_state();
         let drag_changed = self.reset_tab_drag_state();
-        self.clear_selection();
-        rename_changed || hover_changed || drag_changed
+        let selection_changed = self.clear_selection();
+        rename_changed || hover_changed || drag_changed || selection_changed
     }
 }
 

@@ -10,14 +10,14 @@ impl TerminalView {
     ) -> bool {
         let tab_top = TOP_STRIP_CONTENT_OFFSET_Y + (TABBAR_HEIGHT - TAB_ITEM_HEIGHT);
         let tab_bottom = TOP_STRIP_CONTENT_OFFSET_Y + TABBAR_HEIGHT;
-        if pointer_y < tab_top || pointer_y > tab_bottom {
+        if pointer_y < tab_top || pointer_y >= tab_bottom {
             return false;
         }
 
         let mut left = TAB_HORIZONTAL_PADDING + scroll_offset_x;
         for width in tab_widths {
             let right = left + width;
-            if pointer_x >= left && pointer_x <= right {
+            if pointer_x >= left && pointer_x < right {
                 return true;
             }
             left = right + TAB_ITEM_GAP;
@@ -78,7 +78,12 @@ mod tests {
     fn shell_hit_test_detects_tabs_and_respects_y_bounds() {
         let widths = [100.0, 120.0];
         let scroll_offset_x = 0.0;
-        let tab_y = TOP_STRIP_CONTENT_OFFSET_Y + TABBAR_HEIGHT - 1.0;
+        let tab_top = TOP_STRIP_CONTENT_OFFSET_Y + (TABBAR_HEIGHT - TAB_ITEM_HEIGHT);
+        let tab_bottom = TOP_STRIP_CONTENT_OFFSET_Y + TABBAR_HEIGHT;
+        let tab_y = tab_bottom - 1.0;
+        let first_tab_left = TAB_HORIZONTAL_PADDING;
+        let first_tab_right = first_tab_left + widths[0];
+        let second_tab_left = first_tab_right + TAB_ITEM_GAP;
 
         assert!(TerminalView::unified_titlebar_tab_shell_hit_test(
             TAB_HORIZONTAL_PADDING + 20.0,
@@ -95,6 +100,30 @@ mod tests {
         assert!(!TerminalView::unified_titlebar_tab_shell_hit_test(
             TAB_HORIZONTAL_PADDING + 20.0,
             TOP_STRIP_CONTENT_OFFSET_Y,
+            widths,
+            scroll_offset_x
+        ));
+        assert!(TerminalView::unified_titlebar_tab_shell_hit_test(
+            TAB_HORIZONTAL_PADDING + 20.0,
+            tab_top,
+            widths,
+            scroll_offset_x
+        ));
+        assert!(!TerminalView::unified_titlebar_tab_shell_hit_test(
+            TAB_HORIZONTAL_PADDING + 20.0,
+            tab_bottom,
+            widths,
+            scroll_offset_x
+        ));
+        assert!(!TerminalView::unified_titlebar_tab_shell_hit_test(
+            first_tab_right,
+            tab_y,
+            [widths[0]],
+            scroll_offset_x
+        ));
+        assert!(TerminalView::unified_titlebar_tab_shell_hit_test(
+            second_tab_left,
+            tab_y,
             widths,
             scroll_offset_x
         ));

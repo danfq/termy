@@ -963,7 +963,10 @@ mod tests {
             "termy",
         );
 
-        assert_eq!(ordered, vec!["termy", "dracula", "nord"]);
+        assert_eq!(
+            ordered,
+            vec!["termy", "dracula", "nord", SHELL_DECIDE_THEME_ID]
+        );
 
         let ordered_with_missing_current = TerminalView::ordered_theme_ids_for_palette(
             vec!["nord".to_string(), "dracula".to_string()],
@@ -972,7 +975,7 @@ mod tests {
 
         assert_eq!(
             ordered_with_missing_current,
-            vec!["tokyo-night", "dracula", "nord", "shell-decide"]
+            vec!["tokyo-night", "dracula", "nord", SHELL_DECIDE_THEME_ID]
         );
     }
 
