@@ -10,41 +10,34 @@ impl TerminalView {
         normalized
     }
 
-    pub(super) fn tab_title_char_budget(display_width: f32, close_slot_width: f32) -> usize {
-        let text_area = (display_width
-            - (TAB_TEXT_PADDING_X * 2.0)
-            - close_slot_width)
-            .max(0.0);
-        (text_area / TAB_TITLE_CHAR_WIDTH).floor() as usize
+    fn is_path_like_tab_title(title: &str) -> bool {
+        title.contains('/') || title.contains('\\')
     }
 
-    pub(super) fn format_tab_label_for_render(title: &str, max_chars: usize) -> String {
-        let char_count = title.chars().count();
-        if char_count <= max_chars {
-            return title.to_string();
+    fn squeezed_path_tab_label_for_preserved_chars(
+        chars: &[char],
+        basename_len: usize,
+        preserved_chars: usize,
+    ) -> String {
+        if chars.is_empty() {
+            return String::new();
         }
 
-        if max_chars <= 3 {
-            return ".".repeat(max_chars);
+        if preserved_chars == 0 {
+            return "...".to_string();
         }
 
-        let is_path_like = title.contains('/') || title.contains('\\');
-        if !is_path_like {
-            // Non-path titles keep end-truncation behavior through render-level text ellipsis.
-            return title.to_string();
-        }
+        let (head_chars, tail_chars) = if preserved_chars == 1 {
+            (0, 1)
+        } else {
+            let max_tail_chars = preserved_chars - 1;
+            let min_tail_chars = preserved_chars / 2;
+            let preferred_tail_chars = (basename_len + 1).min(max_tail_chars);
+            let tail_chars = preferred_tail_chars.max(min_tail_chars).min(max_tail_chars);
+            (preserved_chars.saturating_sub(tail_chars), tail_chars)
+        };
 
-        let chars: Vec<char> = title.chars().collect();
-        let basename_len = chars
-            .iter()
-            .rposition(|ch| *ch == '/' || *ch == '\\')
-            .map_or(chars.len(), |index| chars.len().saturating_sub(index + 1));
-        let min_tail = (max_chars - 3) / 2;
-        let preferred_tail = (basename_len + 1).min(max_chars - 4);
-        let tail_chars = min_tail.max(preferred_tail);
-        let head_chars = max_chars - 3 - tail_chars;
-
-        let mut formatted = String::with_capacity(max_chars);
+        let mut formatted = String::with_capacity(head_chars + 3 + tail_chars);
         for ch in chars.iter().take(head_chars) {
             formatted.push(*ch);
         }
@@ -58,6 +51,81 @@ impl TerminalView {
         }
 
         formatted
+    }
+
+    fn fitting_dots_for_width<F>(available_text_px: f32, measure_text_px: &mut F) -> String
+    where
+        F: FnMut(&str) -> f32,
+    {
+        if available_text_px <= f32::EPSILON {
+            return String::new();
+        }
+
+        for dots in ["...", "..", "."] {
+            if measure_text_px(dots) <= available_text_px {
+                return dots.to_string();
+            }
+        }
+
+        String::new()
+    }
+
+    pub(super) fn format_tab_label_for_render_measured<F>(
+        title: &str,
+        available_text_px: f32,
+        mut measure_text_px: F,
+    ) -> String
+    where
+        F: FnMut(&str) -> f32,
+    {
+        let available_text_px = if available_text_px.is_finite() {
+            available_text_px.max(0.0)
+        } else {
+            0.0
+        };
+        if title.is_empty() || available_text_px <= f32::EPSILON {
+            return String::new();
+        }
+
+        if measure_text_px(title) <= available_text_px {
+            return title.to_string();
+        }
+
+        if !Self::is_path_like_tab_title(title) {
+            // Non-path titles keep end-truncation behavior through render-level text ellipsis.
+            return title.to_string();
+        }
+
+        let chars: Vec<char> = title.chars().collect();
+        if chars.is_empty() {
+            return String::new();
+        }
+        let basename_len = chars
+            .iter()
+            .rposition(|ch| *ch == '/' || *ch == '\\')
+            .map_or(chars.len(), |index| chars.len().saturating_sub(index + 1));
+        let candidate_for = |preserved_chars: usize| {
+            Self::squeezed_path_tab_label_for_preserved_chars(&chars, basename_len, preserved_chars)
+        };
+
+        let mut low = 0usize;
+        let mut high = chars.len();
+        while low < high {
+            let mid = (low + high + 1) / 2;
+            let candidate = candidate_for(mid);
+            if measure_text_px(candidate.as_str()) <= available_text_px {
+                low = mid;
+            } else {
+                high = mid.saturating_sub(1);
+            }
+        }
+
+        let fitted = candidate_for(low);
+        if measure_text_px(fitted.as_str()) <= available_text_px {
+            fitted
+        } else {
+            Self::fitting_dots_for_width(available_text_px, &mut measure_text_px)
+        }
     }
 
     pub(super) fn fallback_title(&self) -> &str {
@@ -176,11 +244,9 @@ impl TerminalView {
         }
 
         self.tabs[index].title = next;
-        let sticky_title_width = Self::tab_display_width_for_title_without_close_with_max(
-            &self.tabs[index].title,
-            TAB_MAX_WIDTH,
-        );
-        self.tabs[index].sticky_title_width = self.tabs[index].sticky_title_width.max(sticky_title_width);
+        // Keep title-width behavior uniform across manual, shell, explicit, and fallback sources.
+        self.tabs[index].sticky_title_width = 0.0;
+        self.tabs[index].title_text_width = 0.0;
         self.mark_tab_strip_layout_dirty();
         true
     }
@@ -327,6 +393,18 @@ mod tests {
     use super::*;
     use crate::config::{TabTitleConfig, TabTitleSource};
 
+    fn synthetic_text_width(text: &str) -> f32 {
+        text.chars()
+            .map(|ch| match ch {
+                '/' | '\\' => 5.0,
+                '.' => 3.5,
+                'i' | 'l' | '1' => 4.5,
+                'W' | 'M' => 9.0,
+                _ => 7.0,
+            })
+            .sum()
+    }
+
     #[test]
     fn predicted_prompt_seed_title_uses_cwd_template_when_explicit_is_enabled() {
         let config = TabTitleConfig::default();
@@ -353,59 +431,80 @@ mod tests {
     }
 
     #[test]
-    fn tab_title_char_budget_accounts_for_padding_and_close_slot() {
-        let budget = TerminalView::tab_title_char_budget(TAB_MIN_WIDTH, TAB_CLOSE_SLOT_WIDTH);
-        assert_eq!(budget, 7);
-    }
-
-    #[test]
-    fn tab_title_char_budget_reclaims_space_when_close_slot_is_hidden() {
-        let budget_hidden = TerminalView::tab_title_char_budget(TAB_MIN_WIDTH, 0.0);
-        let budget_with_close =
-            TerminalView::tab_title_char_budget(TAB_MIN_WIDTH, TAB_CLOSE_SLOT_WIDTH);
-        assert!(budget_hidden > budget_with_close);
-    }
-
-    #[test]
-    fn tab_title_char_budget_without_close_slot_uses_full_text_area() {
-        let budget_hidden = TerminalView::tab_title_char_budget(TAB_MIN_WIDTH, 0.0);
-        assert_eq!(budget_hidden, 10);
-    }
-
-    #[test]
-    fn tab_title_budget_keeps_active_exact_fit_path_untruncated() {
+    fn measured_tab_title_fit_keeps_exact_fit_path_untruncated() {
         let title = "~/Desktop";
-        let width = TerminalView::tab_display_width_for_title_with_max(title, TAB_MAX_WIDTH);
-        let budget = TerminalView::tab_title_char_budget(width, TAB_CLOSE_SLOT_WIDTH);
+        let width = synthetic_text_width(title);
 
-        assert_eq!(TerminalView::format_tab_label_for_render(title, budget), title);
+        assert_eq!(
+            TerminalView::format_tab_label_for_render_measured(title, width, synthetic_text_width),
+            title
+        );
     }
 
     #[test]
-    fn format_tab_label_for_render_middle_squeezes_path_titles() {
+    fn measured_tab_title_fit_middle_squeezes_path_titles() {
         let title = "~/Desktop/claudeCode/claude-code-provider-proxy/docs";
-        let formatted = TerminalView::format_tab_label_for_render(title, 24);
+        let available = synthetic_text_width("~/Desktop/.../docs");
+        let formatted = TerminalView::format_tab_label_for_render_measured(
+            title,
+            available,
+            synthetic_text_width,
+        );
 
-        assert_eq!(formatted.chars().count(), 24);
         assert!(formatted.contains("..."));
         assert!(formatted.starts_with("~/"));
         assert!(formatted.ends_with("/docs"));
+        assert!(synthetic_text_width(&formatted) <= available);
     }
 
     #[test]
-    fn format_tab_label_for_render_returns_dots_for_tiny_budgets() {
+    fn measured_tab_title_fit_returns_dots_for_tiny_widths() {
         let title = "~/Desktop/claudeCode/claude-code-provider-proxy/docs";
-        assert_eq!(TerminalView::format_tab_label_for_render(title, 3), "...");
-        assert_eq!(TerminalView::format_tab_label_for_render(title, 2), "..");
-        assert_eq!(TerminalView::format_tab_label_for_render(title, 0), "");
+        assert_eq!(
+            TerminalView::format_tab_label_for_render_measured(
+                title,
+                synthetic_text_width("..."),
+                synthetic_text_width,
+            ),
+            "..."
+        );
+        assert_eq!(
+            TerminalView::format_tab_label_for_render_measured(
+                title,
+                synthetic_text_width(".."),
+                synthetic_text_width,
+            ),
+            ".."
+        );
+        assert_eq!(
+            TerminalView::format_tab_label_for_render_measured(title, 0.0, synthetic_text_width),
+            ""
+        );
     }
 
     #[test]
-    fn format_tab_label_for_render_leaves_non_path_titles_for_end_truncation() {
+    fn measured_tab_title_fit_leaves_non_path_titles_for_end_truncation() {
         let title = "cargo test --workspace --all-features";
         assert_eq!(
-            TerminalView::format_tab_label_for_render(title, 8),
+            TerminalView::format_tab_label_for_render_measured(
+                title,
+                synthetic_text_width("cargo test"),
+                synthetic_text_width,
+            ),
             "cargo test --workspace --all-features"
         );
+    }
+
+    #[test]
+    fn measured_tab_title_fit_never_overflows_available_width() {
+        let title = "~/Desktop/claudeCode/claude-code-provider-proxy/docs/test2/test4/test4";
+        let available = synthetic_text_width("~/Desktop/.../test4");
+        let formatted = TerminalView::format_tab_label_for_render_measured(
+            title,
+            available,
+            synthetic_text_width,
+        );
+
+        assert!(synthetic_text_width(&formatted) <= available);
     }
 }

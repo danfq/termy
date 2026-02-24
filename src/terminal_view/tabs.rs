@@ -188,13 +188,16 @@ impl TerminalView {
         elastic.min(hard_cap)
     }
 
-    fn tab_display_width_for_title_with_close_policy(
-        title: &str,
+    fn tab_display_width_for_text_px_with_close_policy(
+        text_width_px: f32,
         max_width: f32,
         reserve_close_slot: bool,
     ) -> f32 {
-        let title_chars = title.trim().chars().count() as f32;
-        let text_width = title_chars * TAB_TITLE_CHAR_WIDTH;
+        let text_width = if text_width_px.is_finite() {
+            text_width_px.max(0.0)
+        } else {
+            0.0
+        };
         let close_slot_width = if reserve_close_slot {
             TAB_CLOSE_SLOT_WIDTH
         } else {
@@ -210,15 +213,42 @@ impl TerminalView {
         width.clamp(TAB_MIN_WIDTH, max_width.max(TAB_MIN_WIDTH))
     }
 
-    pub(super) fn tab_display_width_for_title_with_max(title: &str, max_width: f32) -> f32 {
-        Self::tab_display_width_for_title_with_close_policy(title, max_width, true)
+    pub(super) fn tab_display_width_for_text_px_with_max(text_width_px: f32, max_width: f32) -> f32 {
+        Self::tab_display_width_for_text_px_with_close_policy(text_width_px, max_width, true)
     }
 
-    pub(super) fn tab_display_width_for_title_without_close_with_max(
-        title: &str,
+    pub(super) fn tab_display_width_for_text_px_without_close_with_max(
+        text_width_px: f32,
         max_width: f32,
     ) -> f32 {
-        Self::tab_display_width_for_title_with_close_policy(title, max_width, false)
+        Self::tab_display_width_for_text_px_with_close_policy(text_width_px, max_width, false)
+    }
+
+    pub(super) fn tab_title_text_area_width(tab_width: f32, close_slot_width: f32) -> f32 {
+        (tab_width - (TAB_TEXT_PADDING_X * 2.0) - close_slot_width).max(0.0)
+    }
+
+    pub(super) fn sync_tab_title_text_widths(&mut self, measured_text_widths: &[f32]) -> bool {
+        debug_assert_eq!(measured_text_widths.len(), self.tabs.len());
+        let mut changed = false;
+
+        for (index, tab) in self.tabs.iter_mut().enumerate() {
+            let Some(width) = measured_text_widths.get(index).copied() else {
+                continue;
+            };
+            let width = if width.is_finite() { width.max(0.0) } else { 0.0 };
+            if (tab.title_text_width - width).abs() <= 0.01 {
+                continue;
+            }
+            tab.title_text_width = width;
+            changed = true;
+        }
+
+        if changed {
+            self.mark_tab_strip_layout_dirty();
+        }
+
+        changed
     }
 
     fn tab_reserves_close_slot_for_layout(
@@ -237,16 +267,19 @@ impl TerminalView {
 
     fn resolve_tab_width_for_mode(
         tab_width_mode: TabWidthMode,
-        title: &str,
+        text_width_px: f32,
         effective_max: f32,
         reserve_close_slot: bool,
         sticky_title_width: f32,
     ) -> (f32, f32) {
         let capped_max = effective_max.max(TAB_MIN_WIDTH);
         let title_only_width =
-            Self::tab_display_width_for_title_without_close_with_max(title, effective_max);
-        let close_policy_width =
-            Self::tab_display_width_for_title_with_close_policy(title, effective_max, reserve_close_slot);
+            Self::tab_display_width_for_text_px_without_close_with_max(text_width_px, effective_max);
+        let close_policy_width = Self::tab_display_width_for_text_px_with_close_policy(
+            text_width_px,
+            effective_max,
+            reserve_close_slot,
+        );
 
         match tab_width_mode {
             TabWidthMode::Stable | TabWidthMode::ActiveGrow => (close_policy_width, title_only_width),
@@ -283,7 +316,7 @@ impl TerminalView {
             );
             let (next_width, next_sticky_width) = Self::resolve_tab_width_for_mode(
                 tab_width_mode,
-                &tab.title,
+                tab.title_text_width,
                 effective_max,
                 reserve_close_slot,
                 tab.sticky_title_width,
@@ -738,6 +771,10 @@ impl TerminalView {
 mod tests {
     use super::*;
 
+    fn synthetic_title_width_px(title: &str) -> f32 {
+        title.chars().count() as f32 * 7.0
+    }
+
     fn assert_float_eq(actual: f32, expected: f32) {
         assert!(
             (actual - expected).abs() < 0.0001,
@@ -746,53 +783,48 @@ mod tests {
     }
 
     #[test]
-    fn tab_display_width_for_title_clamps_to_min() {
-        let width = TerminalView::tab_display_width_for_title_with_max("a", TAB_MAX_WIDTH);
+    fn tab_display_width_for_text_px_clamps_to_min() {
+        let width = TerminalView::tab_display_width_for_text_px_with_max(1.0, TAB_MAX_WIDTH);
         assert_eq!(width, TAB_MIN_WIDTH);
     }
 
     #[test]
-    fn tab_display_width_for_title_clamps_to_max() {
-        let very_long_title = "x".repeat(200);
-        let width =
-            TerminalView::tab_display_width_for_title_with_max(&very_long_title, TAB_MAX_WIDTH);
+    fn tab_display_width_for_text_px_clamps_to_max() {
+        let width = TerminalView::tab_display_width_for_text_px_with_max(4000.0, TAB_MAX_WIDTH);
         assert_eq!(width, TAB_MAX_WIDTH);
     }
 
     #[test]
-    fn tab_display_width_for_title_tapers_slack_for_short_titles() {
-        let long_title = "x".repeat(15);
+    fn tab_display_width_for_text_px_tapers_slack_for_short_titles() {
+        let long_text_width = 90.0;
         let long_width =
-            TerminalView::tab_display_width_for_title_with_max(&long_title, TAB_MAX_WIDTH * 2.0);
-        let expected_long = (TAB_TEXT_PADDING_X * 2.0)
-            + (long_title.chars().count() as f32 * TAB_TITLE_CHAR_WIDTH)
-            + TAB_CLOSE_SLOT_WIDTH;
+            TerminalView::tab_display_width_for_text_px_with_max(long_text_width, TAB_MAX_WIDTH * 2.0);
+        let expected_long = (TAB_TEXT_PADDING_X * 2.0) + long_text_width + TAB_CLOSE_SLOT_WIDTH;
         assert_eq!(long_width, expected_long);
 
-        let short_title = "x".repeat(7);
-        let short_width =
-            TerminalView::tab_display_width_for_title_with_max(&short_title, TAB_MAX_WIDTH * 2.0);
-        let short_base = (TAB_TEXT_PADDING_X * 2.0)
-            + (short_title.chars().count() as f32 * TAB_TITLE_CHAR_WIDTH)
-            + TAB_CLOSE_SLOT_WIDTH;
+        let short_text_width = 49.0;
+        let short_width = TerminalView::tab_display_width_for_text_px_with_max(
+            short_text_width,
+            TAB_MAX_WIDTH * 2.0,
+        );
+        let short_base = (TAB_TEXT_PADDING_X * 2.0) + short_text_width + TAB_CLOSE_SLOT_WIDTH;
         assert!(short_width > short_base);
         assert!(short_width < short_base + TAB_TITLE_LAYOUT_SLACK_PX);
     }
 
     #[test]
-    fn tab_display_width_for_title_is_monotonic_near_slack_transition() {
-        let width_7 = TerminalView::tab_display_width_for_title_with_max("xxxxxxx", 512.0);
-        let width_8 = TerminalView::tab_display_width_for_title_with_max("xxxxxxxx", 512.0);
-        let width_9 = TerminalView::tab_display_width_for_title_with_max("xxxxxxxxx", 512.0);
+    fn tab_display_width_for_text_px_is_monotonic_near_slack_transition() {
+        let width_7 = TerminalView::tab_display_width_for_text_px_with_max(49.0, 512.0);
+        let width_8 = TerminalView::tab_display_width_for_text_px_with_max(56.0, 512.0);
+        let width_9 = TerminalView::tab_display_width_for_text_px_with_max(63.0, 512.0);
 
         assert!(width_7 < width_8);
         assert!(width_8 < width_9);
     }
 
     #[test]
-    fn tab_display_width_for_title_with_max_uses_provided_cap() {
-        let very_long_title = "x".repeat(200);
-        let width = TerminalView::tab_display_width_for_title_with_max(&very_long_title, 512.0);
+    fn tab_display_width_for_text_px_with_max_uses_provided_cap() {
+        let width = TerminalView::tab_display_width_for_text_px_with_max(4000.0, 512.0);
         assert_eq!(width, 512.0);
     }
 
@@ -903,25 +935,25 @@ mod tests {
 
     #[test]
     fn active_grow_mode_reserves_close_slot_for_active_only() {
-        let title = "~/Desktop";
+        let text_width = synthetic_title_width_px("~/Desktop");
         let max_width = 512.0;
-        let expected_active = TerminalView::tab_display_width_for_title_with_close_policy(
-            title, max_width, true,
+        let expected_active = TerminalView::tab_display_width_for_text_px_with_close_policy(
+            text_width, max_width, true,
         );
-        let expected_inactive = TerminalView::tab_display_width_for_title_with_close_policy(
-            title, max_width, false,
+        let expected_inactive = TerminalView::tab_display_width_for_text_px_with_close_policy(
+            text_width, max_width, false,
         );
 
         let (active_width, active_sticky) = TerminalView::resolve_tab_width_for_mode(
             TabWidthMode::ActiveGrow,
-            title,
+            text_width,
             max_width,
             true,
             TAB_MIN_WIDTH,
         );
         let (inactive_width, inactive_sticky) = TerminalView::resolve_tab_width_for_mode(
             TabWidthMode::ActiveGrow,
-            title,
+            text_width,
             max_width,
             false,
             TAB_MIN_WIDTH,
@@ -936,23 +968,25 @@ mod tests {
 
     #[test]
     fn active_grow_sticky_drops_close_only_extra_when_inactive() {
-        let title = "~/Desktop";
+        let text_width = synthetic_title_width_px("~/Desktop");
         let max_width = 512.0;
-        let title_only =
-            TerminalView::tab_display_width_for_title_without_close_with_max(title, max_width);
-        let with_close =
-            TerminalView::tab_display_width_for_title_with_close_policy(title, max_width, true);
+        let title_only = TerminalView::tab_display_width_for_text_px_without_close_with_max(
+            text_width, max_width,
+        );
+        let with_close = TerminalView::tab_display_width_for_text_px_with_close_policy(
+            text_width, max_width, true,
+        );
 
         let (active_width, sticky_after_active) = TerminalView::resolve_tab_width_for_mode(
             TabWidthMode::ActiveGrowSticky,
-            title,
+            text_width,
             max_width,
             true,
             title_only,
         );
         let (inactive_width, sticky_after_inactive) = TerminalView::resolve_tab_width_for_mode(
             TabWidthMode::ActiveGrowSticky,
-            title,
+            text_width,
             max_width,
             false,
             sticky_after_active,
@@ -964,14 +998,51 @@ mod tests {
     }
 
     #[test]
+    fn active_grow_sticky_respects_manual_sticky_reset_to_current_title() {
+        let long_text_width = synthetic_title_width_px(
+            "~/Desktop/claudeCode/claude-code-provider-proxy/docs/test2/test4/test4",
+        );
+        let short_text_width = synthetic_title_width_px("~/Desktop");
+        let max_width = 512.0;
+        let short_title_only =
+            TerminalView::tab_display_width_for_text_px_without_close_with_max(short_text_width, max_width);
+
+        let (_, sticky_after_long) = TerminalView::resolve_tab_width_for_mode(
+            TabWidthMode::ActiveGrowSticky,
+            long_text_width,
+            max_width,
+            false,
+            0.0,
+        );
+        let (width_without_reset, _) = TerminalView::resolve_tab_width_for_mode(
+            TabWidthMode::ActiveGrowSticky,
+            short_text_width,
+            max_width,
+            false,
+            sticky_after_long,
+        );
+        let (width_with_reset, sticky_with_reset) = TerminalView::resolve_tab_width_for_mode(
+            TabWidthMode::ActiveGrowSticky,
+            short_text_width,
+            max_width,
+            false,
+            0.0,
+        );
+
+        assert!(width_without_reset > width_with_reset);
+        assert_eq!(width_with_reset, short_title_only);
+        assert_eq!(sticky_with_reset, short_title_only);
+    }
+
+    #[test]
     fn active_grow_sticky_caps_sticky_width_under_pressure() {
-        let title = "tab";
+        let text_width = synthetic_title_width_px("tab");
         let effective_max = 118.0;
         let prior_sticky = 260.0;
 
         let (next_width, next_sticky) = TerminalView::resolve_tab_width_for_mode(
             TabWidthMode::ActiveGrowSticky,
-            title,
+            text_width,
             effective_max,
             false,
             prior_sticky,
@@ -1052,12 +1123,18 @@ mod tests {
     fn tab_drop_slot_mapping_is_stable_with_adaptive_widths() {
         let effective_max = TerminalView::effective_tab_max_width_for_viewport(1500.0, 3);
         let widths = [
-            TerminalView::tab_display_width_for_title_with_max(
-                "~/Desktop/claudeCode/claude-code-provider-proxy/docs",
+            TerminalView::tab_display_width_for_text_px_with_max(
+                synthetic_title_width_px("~/Desktop/claudeCode/claude-code-provider-proxy/docs"),
                 effective_max,
             ),
-            TerminalView::tab_display_width_for_title_with_max("~", effective_max),
-            TerminalView::tab_display_width_for_title_with_max("~/projects/termy", effective_max),
+            TerminalView::tab_display_width_for_text_px_with_max(
+                synthetic_title_width_px("~"),
+                effective_max,
+            ),
+            TerminalView::tab_display_width_for_text_px_with_max(
+                synthetic_title_width_px("~/projects/termy"),
+                effective_max,
+            ),
         ];
 
         let first_midpoint = TAB_HORIZONTAL_PADDING + (widths[0] * 0.5);

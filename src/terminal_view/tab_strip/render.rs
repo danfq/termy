@@ -2,6 +2,8 @@ use super::super::tab_chrome;
 use super::super::tabs::{TabDropMarkerSide, TabStripOverflowState};
 use super::super::*;
 use super::layout::TabStripGeometry;
+use gpui::{Hsla, TextRun};
+use std::collections::HashMap;
 
 #[derive(Clone, Copy)]
 struct TabStripPalette {
@@ -46,6 +48,58 @@ struct TabItemRenderInput {
 }
 
 impl TerminalView {
+    fn measure_tab_title_width(
+        window: &Window,
+        font_family: &SharedString,
+        title: &str,
+        width_cache: &mut HashMap<String, f32>,
+    ) -> f32 {
+        if title.is_empty() {
+            return 0.0;
+        }
+
+        if let Some(width) = width_cache.get(title) {
+            return *width;
+        }
+
+        let run = TextRun {
+            len: title.len(),
+            font: Font {
+                family: font_family.clone(),
+                weight: FontWeight::NORMAL,
+                ..Default::default()
+            },
+            color: Hsla {
+                h: 0.0,
+                s: 0.0,
+                l: 1.0,
+                a: 1.0,
+            },
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        };
+        let shaped = window
+            .text_system()
+            .shape_line(title.to_string().into(), px(12.0), &[run], None);
+        let width: f32 = shaped.x_for_index(title.len()).into();
+        let width = width.max(0.0);
+        width_cache.insert(title.to_string(), width);
+        width
+    }
+
+    fn measure_tab_title_widths(
+        &self,
+        window: &Window,
+        font_family: &SharedString,
+        width_cache: &mut HashMap<String, f32>,
+    ) -> Vec<f32> {
+        self.tabs
+            .iter()
+            .map(|tab| Self::measure_tab_title_width(window, font_family, &tab.title, width_cache))
+            .collect()
+    }
+
     fn resolve_tab_strip_palette(&self, colors: &TerminalColors, tabbar_bg: gpui::Rgba) -> TabStripPalette {
         let tab_stroke_color = tab_chrome::resolve_tab_stroke_color(
             tabbar_bg,
@@ -439,10 +493,12 @@ impl TerminalView {
 
     fn build_tabs_scroll_content(
         &mut self,
+        window: &Window,
         state: &TabStripRenderState,
         palette: &TabStripPalette,
         font_family: &SharedString,
         colors: &TerminalColors,
+        title_width_cache: &mut HashMap<String, f32>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let mut tabs_scroll_content = div()
@@ -500,9 +556,13 @@ impl TerminalView {
             } else {
                 0.0
             };
-            let label = Self::format_tab_label_for_render(
+            let available_text_px = Self::tab_title_text_area_width(tab.display_width, close_slot_width);
+            let label = Self::format_tab_label_for_render_measured(
                 &tab.title,
-                Self::tab_title_char_budget(tab.display_width, close_slot_width),
+                available_text_px,
+                |candidate| {
+                    Self::measure_tab_title_width(window, font_family, candidate, title_width_cache)
+                },
             );
 
             let tab_item = self.render_tab_item(
@@ -662,10 +722,22 @@ impl TerminalView {
         tabbar_bg: gpui::Rgba,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let mut title_width_cache = HashMap::new();
+        let measured_title_widths =
+            self.measure_tab_title_widths(window, font_family, &mut title_width_cache);
+        self.sync_tab_title_text_widths(&measured_title_widths);
+
         let state = self.build_tab_strip_render_state(window);
         let palette = self.resolve_tab_strip_palette(colors, tabbar_bg);
-        let tabs_scroll_content =
-            self.build_tabs_scroll_content(&state, &palette, font_family, colors, cx);
+        let tabs_scroll_content = self.build_tabs_scroll_content(
+            window,
+            &state,
+            &palette,
+            font_family,
+            colors,
+            &mut title_width_cache,
+            cx,
+        );
 
         let left_overflow_indicator = state.overflow_state.left.then(|| {
             Self::render_overflow_indicator(

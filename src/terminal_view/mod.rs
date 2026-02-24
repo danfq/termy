@@ -178,6 +178,7 @@ struct TerminalTab {
     pending_command_title: Option<String>,
     pending_command_token: u64,
     title: String,
+    title_text_width: f32,
     sticky_title_width: f32,
     display_width: f32,
     running_process: bool,
@@ -189,10 +190,11 @@ impl TerminalTab {
             .as_deref()
             .unwrap_or(DEFAULT_TAB_TITLE)
             .to_string();
+        let title_text_width = 0.0;
         let sticky_title_width =
-            TerminalView::tab_display_width_for_title_without_close_with_max(&title, TAB_MAX_WIDTH);
+            TerminalView::tab_display_width_for_text_px_without_close_with_max(title_text_width, TAB_MAX_WIDTH);
         let display_width =
-            TerminalView::tab_display_width_for_title_with_max(&title, TAB_MAX_WIDTH);
+            TerminalView::tab_display_width_for_text_px_with_max(title_text_width, TAB_MAX_WIDTH);
 
         Self {
             terminal,
@@ -202,6 +204,7 @@ impl TerminalTab {
             pending_command_title: None,
             pending_command_token: 0,
             title,
+            title_text_width,
             sticky_title_width,
             display_width,
             running_process: false,
