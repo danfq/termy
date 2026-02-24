@@ -1,13 +1,80 @@
+use std::collections::{HashMap, VecDeque};
 #[cfg(windows)]
 use std::path::Path;
 #[cfg(unix)]
 use std::path::PathBuf;
+use std::sync::{Mutex, OnceLock};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DetectedLink {
     pub start_col: usize,
     pub end_col: usize,
     pub target: String,
+}
+
+const FILE_URL_CACHE_CAPACITY: usize = 128;
+
+#[derive(Default)]
+struct FileUrlLruCache {
+    capacity: usize,
+    entries: HashMap<String, Option<String>>,
+    order: VecDeque<String>,
+}
+
+impl FileUrlLruCache {
+    fn new(capacity: usize) -> Self {
+        Self {
+            capacity,
+            entries: HashMap::new(),
+            order: VecDeque::new(),
+        }
+    }
+
+    fn get(&mut self, key: &str) -> Option<Option<String>> {
+        let value = self.entries.get(key).cloned()?;
+        self.touch(key);
+        Some(value)
+    }
+
+    fn insert(&mut self, key: String, value: Option<String>) {
+        if self.entries.contains_key(&key) {
+            self.entries.insert(key.clone(), value);
+            self.touch(&key);
+            return;
+        }
+
+        self.entries.insert(key.clone(), value);
+        self.order.push_back(key);
+
+        while self.order.len() > self.capacity {
+            if let Some(oldest) = self.order.pop_front() {
+                self.entries.remove(&oldest);
+            }
+        }
+    }
+
+    fn touch(&mut self, key: &str) {
+        if let Some(pos) = self.order.iter().position(|existing| existing == key) {
+            self.order.remove(pos);
+        }
+        self.order.push_back(key.to_string());
+    }
+}
+
+fn file_url_cache() -> &'static Mutex<FileUrlLruCache> {
+    static CACHE: OnceLock<Mutex<FileUrlLruCache>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(FileUrlLruCache::new(FILE_URL_CACHE_CAPACITY)))
+}
+
+fn lookup_cached_file_url(token: &str) -> Option<Option<String>> {
+    let mut cache = file_url_cache().lock().ok()?;
+    cache.get(token)
+}
+
+fn store_cached_file_url(token: &str, resolved: Option<String>) {
+    if let Ok(mut cache) = file_url_cache().lock() {
+        cache.insert(token.to_string(), resolved);
+    }
 }
 
 pub fn find_link_in_line(line: &[char], col: usize) -> Option<DetectedLink> {
@@ -133,8 +200,18 @@ fn extract_local_path_from_file_url(_: &str) -> Option<String> {
     None
 }
 
-#[cfg(unix)]
 fn canonicalize_path_to_file_url(token: &str) -> Option<String> {
+    if let Some(cached) = lookup_cached_file_url(token) {
+        return cached;
+    }
+
+    let resolved = canonicalize_path_to_file_url_uncached(token);
+    store_cached_file_url(token, resolved.clone());
+    resolved
+}
+
+#[cfg(unix)]
+fn canonicalize_path_to_file_url_uncached(token: &str) -> Option<String> {
     let raw_path = strip_line_col_suffix(token);
     if raw_path.is_empty() {
         return None;
@@ -158,7 +235,7 @@ fn expand_tilde_path(path: &str) -> Option<PathBuf> {
 }
 
 #[cfg(windows)]
-fn canonicalize_path_to_file_url(token: &str) -> Option<String> {
+fn canonicalize_path_to_file_url_uncached(token: &str) -> Option<String> {
     let mut raw_path = strip_line_col_suffix(token);
     if raw_path.is_empty() {
         return None;
@@ -194,7 +271,7 @@ fn canonicalize_path_to_file_url(token: &str) -> Option<String> {
 }
 
 #[cfg(not(any(unix, windows)))]
-fn canonicalize_path_to_file_url(_: &str) -> Option<String> {
+fn canonicalize_path_to_file_url_uncached(_: &str) -> Option<String> {
     None
 }
 
@@ -366,7 +443,7 @@ fn has_path_like_structure(path: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::classify_link_token;
+    use super::{FileUrlLruCache, classify_link_token};
     use std::fs;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -428,5 +505,18 @@ mod tests {
         let token = missing_path.to_string_lossy();
 
         assert_eq!(classify_link_token(&token), None);
+    }
+
+    #[test]
+    fn file_url_lru_cache_evicts_old_entries() {
+        let mut cache = FileUrlLruCache::new(2);
+        cache.insert("a".to_string(), Some("file:///a".to_string()));
+        cache.insert("b".to_string(), Some("file:///b".to_string()));
+        assert_eq!(cache.get("a"), Some(Some("file:///a".to_string())));
+        cache.insert("c".to_string(), Some("file:///c".to_string()));
+
+        assert_eq!(cache.get("a"), Some(Some("file:///a".to_string())));
+        assert_eq!(cache.get("b"), None);
+        assert_eq!(cache.get("c"), Some(Some("file:///c".to_string())));
     }
 }
