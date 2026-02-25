@@ -163,6 +163,12 @@ fn enum_keys_parse_table_driven() {
         assert_eq!(config.terminal_scrollbar_visibility, expected);
     }
     assert_eq!(
+        parse("scrollbar_visibility = nope\n").terminal_scrollbar_visibility,
+        TerminalScrollbarVisibility::OnScroll
+    );
+    // `scrollbar_visibility` is the supported key; the legacy
+    // `terminal_scrollbar_visibility` key should be ignored.
+    assert_eq!(
         parse("terminal_scrollbar_visibility = always\n").terminal_scrollbar_visibility,
         TerminalScrollbarVisibility::OnScroll
     );
@@ -217,17 +223,6 @@ impl BoolField {
         }
     }
 
-    fn default_value(self, config: &AppConfig) -> bool {
-        match self {
-            Self::ShowTermyInTitlebar => config.show_termy_in_titlebar,
-            Self::CursorBlink => config.cursor_blink,
-            Self::BackgroundBlur => config.background_blur,
-            Self::WarnOnQuit => config.warn_on_quit_with_running_process,
-            Self::CommandPaletteShowKeybinds => config.command_palette_show_keybinds,
-            Self::TabTitleShellIntegration => config.tab_title.shell_integration,
-        }
-    }
-
     fn read(self, config: &AppConfig) -> bool {
         match self {
             Self::ShowTermyInTitlebar => config.show_termy_in_titlebar,
@@ -268,7 +263,7 @@ fn bool_keys_parse_table_driven() {
         assert!(!field.read(&disabled_numeric));
 
         let invalid = parse(&format!("{} = maybe\n", key));
-        assert_eq!(field.read(&invalid), field.default_value(&defaults));
+        assert_eq!(field.read(&invalid), field.read(&defaults));
     }
 }
 
@@ -327,6 +322,7 @@ fn numeric_keys_parse_table_driven() {
 
     assert_eq!(parse("background_opacity = -0.5\n").background_opacity, 0.0);
     assert_eq!(parse("background_opacity = 4\n").background_opacity, 1.0);
+    // The removed/unsupported alias should be ignored, so the default remains.
     assert_eq!(
         parse("transparent_background_opacity = 0.2\n").background_opacity,
         defaults.background_opacity

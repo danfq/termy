@@ -216,7 +216,6 @@ pub fn validate_contents(contents: &str) -> ValidationReport {
                 }
                 "cursor_blink"
                 | "background_blur"
-                | "use_tabs"
                 | "warn_on_quit_with_running_process"
                 | "command_palette_show_keybinds"
                 | "tab_title_shell_integration" => {

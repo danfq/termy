@@ -1,7 +1,6 @@
 use crate::config::{CustomColors, SHELL_DECIDE_THEME_ID};
 use alacritty_terminal::vte::ansi::{Color as AnsiColor, NamedColor, Rgb as AnsiRgb};
 use gpui::Rgba;
-use termy_config_core::Rgb8;
 use termy_themes as themes;
 
 #[derive(Clone)]
@@ -63,17 +62,17 @@ impl TerminalColors {
 
     fn apply_custom(&mut self, custom: &CustomColors) {
         if let Some(fg) = custom.foreground {
-            self.foreground = rgb8_to_rgba(fg);
+            self.foreground = rgba(fg.r, fg.g, fg.b);
         }
         if let Some(bg) = custom.background {
-            self.background = rgb8_to_rgba(bg);
+            self.background = rgba(bg.r, bg.g, bg.b);
         }
         if let Some(cursor) = custom.cursor {
-            self.cursor = rgb8_to_rgba(cursor);
+            self.cursor = rgba(cursor.r, cursor.g, cursor.b);
         }
         for (i, color) in custom.ansi.iter().enumerate() {
             if let Some(c) = color {
-                self.ansi[i] = rgb8_to_rgba(*c);
+                self.ansi[i] = rgba(c.r, c.g, c.b);
             }
         }
     }
@@ -142,8 +141,4 @@ fn rgba(r: u8, g: u8, b: u8) -> Rgba {
         b: b as f32 / 255.0,
         a: 1.0,
     }
-}
-
-fn rgb8_to_rgba(color: Rgb8) -> Rgba {
-    rgba(color.r, color.g, color.b)
 }

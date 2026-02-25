@@ -34,8 +34,7 @@ pub struct RuntimeConfigLoad {
 
 pub(crate) const DEFAULT_CONFIG: &str = include_str!("default_config.txt");
 
-pub fn load_or_create() -> Result<LoadedConfig, ConfigIoError> {
-    let path = ensure_config_file()?;
+fn load_from_path(path: PathBuf) -> Result<LoadedConfig, ConfigIoError> {
     let contents = fs::read_to_string(&path).map_err(|source| ConfigIoError::ReadConfig {
         path: path.clone(),
         source,
@@ -87,6 +86,9 @@ pub fn show_parse_diagnostics_toast(diagnostics: &[ConfigDiagnostic]) {
     );
 }
 
+// This uses Rust's default SipHash-based hasher and is only for in-process
+// change detection. Do not persist or compare this fingerprint across
+// processes/toolchain versions; use a stable hash algorithm for that.
 pub fn config_fingerprint(path: &Path) -> Option<u64> {
     let contents = fs::read(path).ok()?;
     let mut hasher = DefaultHasher::new();
@@ -113,12 +115,25 @@ pub fn load_runtime_config(
     previous_error: &mut Option<String>,
     error_context: &'static str,
 ) -> RuntimeConfigLoad {
-    match load_or_create() {
+    let path = match ensure_config_file() {
+        Ok(path) => path,
+        Err(error) => {
+            report_config_error_once(previous_error, error_context, &error);
+            return RuntimeConfigLoad {
+                config: AppConfig::default(),
+                path: None,
+                fingerprint: None,
+                loaded_from_disk: false,
+            };
+        }
+    };
+    let fingerprint = config_fingerprint(&path);
+
+    match load_from_path(path.clone()) {
         Ok(loaded) => {
             log_parse_diagnostics(&loaded.diagnostics);
             show_parse_diagnostics_toast(&loaded.diagnostics);
             *previous_error = None;
-            let fingerprint = config_fingerprint(&loaded.path);
             RuntimeConfigLoad {
                 config: loaded.config,
                 path: Some(loaded.path),
@@ -128,11 +143,9 @@ pub fn load_runtime_config(
         }
         Err(error) => {
             report_config_error_once(previous_error, error_context, &error);
-            let path = ensure_config_file().ok();
-            let fingerprint = path.as_deref().and_then(config_fingerprint);
             RuntimeConfigLoad {
                 config: AppConfig::default(),
-                path,
+                path: Some(path),
                 fingerprint,
                 loaded_from_disk: false,
             }

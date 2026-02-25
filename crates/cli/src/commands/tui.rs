@@ -178,12 +178,12 @@ fn get_show_config_content() -> Vec<String> {
         lines.push("  font_family = JetBrains Mono".to_string());
         lines.push("  font_size = 14".to_string());
         lines.push("  term = xterm-256color".to_string());
-        lines.push("  cursor_style = line".to_string());
+        lines.push("  cursor_style = block".to_string());
         lines.push("  cursor_blink = true".to_string());
         lines.push("  background_opacity = 1.0".to_string());
         lines.push("  padding_x = 12".to_string());
         lines.push("  padding_y = 8".to_string());
-        lines.push("  scrollback_history = 10000".to_string());
+        lines.push("  scrollback_history = 2000".to_string());
         return lines;
     }
 

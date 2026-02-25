@@ -15,6 +15,10 @@ pub struct Rgb8 {
 }
 
 impl Rgb8 {
+    /// Parses a 6-digit RGB hex color, with optional leading `#`.
+    ///
+    /// Accepted examples: `"#112233"`, `"112233"`.
+    /// Rejected examples: `"#fff"` (3-digit shorthand), `"#11223344"` (RGBA).
     pub fn from_hex(value: &str) -> Option<Self> {
         let hex = value.trim().trim_start_matches('#');
         if hex.len() != 6 {

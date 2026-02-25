@@ -656,8 +656,9 @@ fn parse_string_value(value: &str) -> Option<String> {
         return None;
     }
 
-    let unquoted = if (trimmed.starts_with('"') && trimmed.ends_with('"'))
-        || (trimmed.starts_with('\'') && trimmed.ends_with('\''))
+    let unquoted = if trimmed.len() >= 2
+        && ((trimmed.starts_with('"') && trimmed.ends_with('"'))
+            || (trimmed.starts_with('\'') && trimmed.ends_with('\'')))
     {
         &trimmed[1..trimmed.len() - 1]
     } else {

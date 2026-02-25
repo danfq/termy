@@ -1,4 +1,4 @@
-use std::{fs, path::Path};
+use std::{collections::HashMap, fs, path::Path};
 
 use termy_config_core::{Rgb8, canonical_color_key, parse_theme_id};
 
@@ -132,11 +132,16 @@ pub fn import_colors_from_json(json_path: &Path) -> Result<String, String> {
         .ok_or_else(|| "JSON must be an object".to_string())?;
 
     let mut color_lines = Vec::new();
+    let mut color_line_indices: HashMap<&'static str, usize> = HashMap::new();
 
     for (key, value) in colors {
         if key.starts_with('$') {
             continue;
         }
+
+        let Some(config_key) = canonical_color_key(key) else {
+            continue;
+        };
 
         let hex = value
             .as_str()
@@ -146,10 +151,15 @@ pub fn import_colors_from_json(json_path: &Path) -> Result<String, String> {
             return Err(format!("Invalid hex color for '{}': {}", key, hex));
         }
 
-        let Some(config_key) = canonical_color_key(key) else {
+        let is_canonical_key = key.eq_ignore_ascii_case(config_key);
+        if let Some(existing_index) = color_line_indices.get(config_key).copied() {
+            if is_canonical_key {
+                color_lines[existing_index] = format!("{} = {}", config_key, hex);
+            }
             continue;
-        };
+        }
 
+        color_line_indices.insert(config_key, color_lines.len());
         color_lines.push(format!("{} = {}", config_key, hex));
     }
 
@@ -183,7 +193,28 @@ pub fn set_config_value(key: &str, value: &str) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{replace_or_insert_section, upsert_root_assignment};
+    use std::path::Path;
+    use std::sync::{LazyLock, Mutex};
+
+    use super::{import_colors_from_json, replace_or_insert_section, upsert_root_assignment};
+
+    static ENV_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+
+    fn with_temp_xdg_config_home(test: impl FnOnce(&Path)) {
+        let _guard = ENV_LOCK.lock().expect("env lock");
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let xdg_home = temp_dir.path().join("xdg");
+        std::fs::create_dir_all(&xdg_home).expect("create xdg home");
+
+        let previous_xdg = std::env::var_os("XDG_CONFIG_HOME");
+        unsafe { std::env::set_var("XDG_CONFIG_HOME", &xdg_home) };
+        test(temp_dir.path());
+        if let Some(previous) = previous_xdg {
+            unsafe { std::env::set_var("XDG_CONFIG_HOME", previous) };
+        } else {
+            unsafe { std::env::remove_var("XDG_CONFIG_HOME") };
+        }
+    }
 
     #[test]
     fn upsert_root_assignment_replaces_existing_root_value() {
@@ -279,5 +310,47 @@ mod tests {
             output,
             "theme = termy\nfont_size = 14\n\n[colors]\nforeground = #111111\n"
         );
+    }
+
+    #[test]
+    fn import_colors_ignores_unknown_metadata_keys() {
+        with_temp_xdg_config_home(|temp_path| {
+            let json_path = temp_path.join("colors.json");
+            std::fs::write(
+                &json_path,
+                "{\n  \"$schema\": \"https://example.com/theme.schema.json\",\n  \"metadata\": {\"name\": \"demo\"},\n  \"foreground\": \"#112233\"\n}\n",
+            )
+            .expect("write colors json");
+
+            let result = import_colors_from_json(&json_path).expect("import colors");
+            assert_eq!(result, "Imported 1 colors");
+
+            let config_path = termy_config_core::config_path().expect("config path");
+            let contents = std::fs::read_to_string(config_path).expect("read config");
+            assert!(contents.contains("[colors]\nforeground = #112233\n"));
+        });
+    }
+
+    #[test]
+    fn import_colors_alias_collision_prefers_canonical_key_value() {
+        with_temp_xdg_config_home(|temp_path| {
+            let json_path = temp_path.join("colors.json");
+            std::fs::write(
+                &json_path,
+                "{\n  \"fg\": \"#111111\",\n  \"foreground\": \"#222222\"\n}\n",
+            )
+            .expect("write colors json");
+
+            let result = import_colors_from_json(&json_path).expect("import colors");
+            assert_eq!(result, "Imported 1 colors");
+
+            let config_path = termy_config_core::config_path().expect("config path");
+            let contents = std::fs::read_to_string(config_path).expect("read config");
+            let foreground_lines: Vec<&str> = contents
+                .lines()
+                .filter(|line| line.trim_start().starts_with("foreground ="))
+                .collect();
+            assert_eq!(foreground_lines, vec!["foreground = #222222"]);
+        });
     }
 }
