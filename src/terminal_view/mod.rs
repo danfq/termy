@@ -1153,7 +1153,7 @@ impl TerminalView {
         }
 
         self.config_fingerprint = Some(fingerprint);
-        let config = AppConfig::load_or_create();
+        let config = config::load_or_create();
         let changed = self.apply_runtime_config(config, cx);
         if changed {
             termy_toast::info("Configuration reloaded");
@@ -1165,7 +1165,7 @@ impl TerminalView {
         if let Some(path) = &self.config_path {
             self.config_fingerprint = Self::config_fingerprint(path);
         }
-        let config = AppConfig::load_or_create();
+        let config = config::load_or_create();
         self.apply_runtime_config(config, cx);
     }
 

@@ -1,13 +1,7 @@
-use gpui::Rgba;
 use std::{
-    env, fs,
+    env,
     path::{Path, PathBuf},
-    process::Command,
-    sync::{LazyLock, Mutex},
 };
-
-static CONFIG_CHANGE_SUBSCRIBERS: LazyLock<Mutex<Vec<flume::Sender<()>>>> =
-    LazyLock::new(|| Mutex::new(Vec::new()));
 
 const DEFAULT_TAB_TITLE_FALLBACK: &str = "Terminal";
 const DEFAULT_TAB_TITLE_EXPLICIT_PREFIX: &str = "termy:tab:";
@@ -24,230 +18,70 @@ const MAX_MOUSE_SCROLL_MULTIPLIER: f32 = 1_000.0;
 const DEFAULT_CURSOR_BLINK: bool = true;
 const DEFAULT_WARN_ON_QUIT_WITH_RUNNING_PROCESS: bool = true;
 
-const DEFAULT_CONFIG: &str = "# Main settings\n\
-theme = termy\n\
-# TERM value for child shells and terminal apps\n\
-term = xterm-256color\n\
-# Startup directory for new terminal sessions (~ supported)\n\
-# working_dir = ~/Documents\n\
-# Warn before quitting when tabs are busy (running command/fullscreen TUI)\n\
-# warn_on_quit_with_running_process = true\n\
-# Tab title mode. Supported values: smart, shell, explicit, static\n\
-# smart = manual rename > explicit title > shell/app title > fallback\n\
-tab_title_mode = smart\n\
-# Export TERMY_* env vars for optional shell tab-title integration\n\
-tab_title_shell_integration = true\n\
-# Tab close button visibility: active_hover | hover | always\n\
-tab_close_visibility = active_hover\n\
-# Tab width behavior: stable | active_grow | active_grow_sticky\n\
-tab_width_mode = active_grow_sticky\n\
-# Show/hide termy in the macOS titlebar (between traffic lights and tabs)\n\
-# show_termy_in_titlebar = true\n\
-# Optional: static fallback tab title\n\
-# tab_title_fallback = Terminal\n\
-# Advanced tab-title options are documented in docs/configuration.md:\n\
-# tab_title_priority = manual, explicit, shell, fallback\n\
-# tab_title_explicit_prefix = termy:tab:\n\
-# tab_title_prompt_format = {cwd}\n\
-# tab_title_command_format = {command}\n\
-# Startup window size in pixels\n\
-window_width = 1280\n\
-window_height = 820\n\
-# Terminal font family\n\
-font_family = JetBrains Mono\n\
-# Terminal font size in pixels\n\
-font_size = 14\n\
-# Cursor style shared by terminal and inline inputs (line|block)\n\
-# cursor_style = block\n\
-# Enable cursor blink for terminal and inline inputs\n\
-# cursor_blink = true\n\
-# Terminal background opacity (0.0 = fully transparent, 1.0 = opaque)\n\
-# background_opacity = 1.0\n\
-# Enable/disable platform blur for transparent backgrounds\n\
-# background_blur = false\n\
-# Inner terminal padding in pixels\n\
-padding_x = 12\n\
-padding_y = 8\n\
-# Mouse wheel scroll speed multiplier\n\
-# mouse_scroll_multiplier = 3\n\
-# Terminal scrollbar visibility: always | on_scroll | off\n\
-# (while scrolled up in history, scrollbar stays visible in all modes)\n\
-# scrollbar_visibility = on_scroll\n\
-# Scrollbar style: neutral | muted_theme | theme\n\
-# scrollbar_style = neutral\n\
-\n\
-# Advanced runtime settings (usually leave these as defaults)\n\
-# Preferred shell executable path\n\
-# shell = /bin/zsh\n\
-# Fallback startup directory when working_dir is unset: home or process\n\
-# working_dir_fallback = home\n\
-# Advertise 24-bit color support to child apps\n\
-# colorterm = truecolor\n\
-# Scrollback history lines (lower = less memory, max 100000)\n\
-# scrollback_history = 2000\n\
-# Scrollback for inactive tabs (saves memory with many tabs)\n\
-# inactive_tab_scrollback = 500\n\
-# Keybindings (Ghostty-style trigger overrides)\n\
-# keybind = cmd-p=toggle_command_palette\n\
-# keybind = cmd-c=copy\n\
-# keybind = cmd-c=unbind\n\
-# keybind = clear\n\
-# Show/hide shortcut badges in command palette\n\
-# command_palette_show_keybinds = true\n";
+pub const VALID_ROOT_KEYS: &[&str] = &[
+    "theme",
+    "working_dir",
+    "working_dir_fallback",
+    "default_working_dir",
+    "warn_on_quit_with_running_process",
+    "tab_title_priority",
+    "tab_title_mode",
+    "tab_title_fallback",
+    "tab_title_explicit_prefix",
+    "tab_title_shell_integration",
+    "tab_title_prompt_format",
+    "tab_title_command_format",
+    "tab_close_visibility",
+    "tab_width_mode",
+    "show_termy_in_titlebar",
+    "shell",
+    "term",
+    "colorterm",
+    "window_width",
+    "window_height",
+    "font_family",
+    "font_size",
+    "cursor_style",
+    "cursor_blink",
+    "background_opacity",
+    "background_blur",
+    "padding_x",
+    "padding_y",
+    "mouse_scroll_multiplier",
+    "scrollbar_visibility",
+    "scrollbar_style",
+    "scrollback_history",
+    "scrollback",
+    "inactive_tab_scrollback",
+    "command_palette_show_keybinds",
+    "keybind",
+];
+
+pub const VALID_SECTIONS: &[&str] = &["colors", "tab_title"];
 
 pub type ThemeId = String;
 
-const DEFAULT_THEME_ID: &str = "termy";
-pub(crate) const SHELL_DECIDE_THEME_ID: &str = "shell-decide";
+pub const SHELL_DECIDE_THEME_ID: &str = "shell-decide";
 
-fn parse_theme_id(value: &str) -> Option<ThemeId> {
-    let value = value.trim();
-    if value.is_empty() {
-        return None;
-    }
-
-    if let Some(canonical) = termy_themes::canonical_builtin_theme_id(value) {
-        return Some(canonical.to_string());
-    }
-
-    let normalized = termy_themes::normalize_theme_id(value);
-    if matches!(
-        normalized.as_str(),
-        "shell" | "shell-decide" | "let-shell-decide"
-    ) {
-        return Some(SHELL_DECIDE_THEME_ID.to_string());
-    }
-
-    if normalized.is_empty() {
-        None
-    } else {
-        Some(normalized)
-    }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Rgb8 {
+    pub r: u8,
+    pub g: u8,
+    pub b: u8,
 }
 
-fn upsert_theme_assignment(contents: &str, theme_id: &str) -> String {
-    let mut new_config = String::new();
-    let mut replaced = false;
-    let mut inserted_before_first_section = false;
-    let mut in_root_section = true;
-
-    for line in contents.lines() {
-        let trimmed = line.trim();
-        let is_section_header = trimmed.starts_with('[') && trimmed.ends_with(']');
-
-        if is_section_header {
-            if !replaced && !inserted_before_first_section {
-                new_config.push_str(&format!("theme = {}\n", theme_id));
-                inserted_before_first_section = true;
-            }
-            in_root_section = false;
-            new_config.push_str(line);
-            new_config.push('\n');
-            continue;
+impl Rgb8 {
+    pub fn from_hex(value: &str) -> Option<Self> {
+        let hex = value.trim().trim_start_matches('#');
+        if hex.len() != 6 {
+            return None;
         }
 
-        if in_root_section {
-            let mut parts = trimmed.splitn(2, '=');
-            let key = parts.next().unwrap_or("").trim();
-            if key.eq_ignore_ascii_case("theme") {
-                if !replaced {
-                    new_config.push_str(&format!("theme = {}\n", theme_id));
-                    replaced = true;
-                }
-                continue;
-            }
-        }
-
-        new_config.push_str(line);
-        new_config.push('\n');
+        let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
+        let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
+        let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
+        Some(Self { r, g, b })
     }
-
-    if !replaced && !inserted_before_first_section {
-        if !new_config.is_empty() && !new_config.ends_with('\n') {
-            new_config.push('\n');
-        }
-        new_config.push_str(&format!("theme = {}\n", theme_id));
-    }
-
-    new_config
-}
-
-fn replace_or_insert_section(
-    contents: &str,
-    section_name: &str,
-    section_lines: &[String],
-) -> String {
-    let mut new_config = String::new();
-    let mut in_target_section = false;
-    let mut target_section_found = false;
-    let target_header = format!("[{}]", section_name);
-
-    for line in contents.lines() {
-        let trimmed = line.trim();
-        if trimmed.starts_with('[') && trimmed.ends_with(']') {
-            in_target_section = false;
-            if trimmed.eq_ignore_ascii_case(&target_header) {
-                target_section_found = true;
-                in_target_section = true;
-                new_config.push_str(line);
-                new_config.push('\n');
-                for section_line in section_lines {
-                    new_config.push_str(section_line);
-                    new_config.push('\n');
-                }
-                continue;
-            }
-        }
-
-        if in_target_section {
-            continue;
-        }
-
-        new_config.push_str(line);
-        new_config.push('\n');
-    }
-
-    if !target_section_found {
-        if !new_config.is_empty() {
-            new_config.push('\n');
-        }
-        new_config.push_str(&target_header);
-        new_config.push('\n');
-        for section_line in section_lines {
-            new_config.push_str(section_line);
-            new_config.push('\n');
-        }
-    }
-
-    new_config
-}
-
-fn update_config_contents<R>(
-    updater: impl FnOnce(&str) -> Result<(String, R), String>,
-) -> Result<R, String> {
-    let config_path =
-        ensure_config_file().ok_or_else(|| "Could not locate config file".to_string())?;
-    let existing =
-        fs::read_to_string(&config_path).map_err(|e| format!("Failed to read config: {}", e))?;
-    let (updated, result) = updater(&existing)?;
-    fs::write(&config_path, updated).map_err(|e| format!("Failed to write config: {}", e))?;
-    notify_config_changed();
-    Ok(result)
-}
-
-fn notify_config_changed() {
-    let Ok(mut subscribers) = CONFIG_CHANGE_SUBSCRIBERS.lock() else {
-        return;
-    };
-    subscribers.retain(|tx| tx.send(()).is_ok());
-}
-
-pub fn subscribe_config_changes() -> flume::Receiver<()> {
-    let (tx, rx) = flume::unbounded();
-    if let Ok(mut subscribers) = CONFIG_CHANGE_SUBSCRIBERS.lock() {
-        subscribers.push(tx);
-    }
-    rx
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -459,10 +293,10 @@ impl Default for TerminalScrollbarStyle {
 
 #[derive(Debug, Clone, Default)]
 pub struct CustomColors {
-    pub foreground: Option<Rgba>,
-    pub background: Option<Rgba>,
-    pub cursor: Option<Rgba>,
-    pub ansi: [Option<Rgba>; 16],
+    pub foreground: Option<Rgb8>,
+    pub background: Option<Rgb8>,
+    pub cursor: Option<Rgb8>,
+    pub ansi: [Option<Rgb8>; 16],
 }
 
 #[derive(Debug, Clone)]
@@ -507,7 +341,7 @@ pub struct KeybindConfigLine {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
-            theme: DEFAULT_THEME_ID.to_string(),
+            theme: "termy".to_string(),
             working_dir: None,
             working_dir_fallback: WorkingDirFallback::default(),
             warn_on_quit_with_running_process: DEFAULT_WARN_ON_QUIT_WITH_RUNNING_PROCESS,
@@ -541,20 +375,7 @@ impl Default for AppConfig {
 }
 
 impl AppConfig {
-    pub fn load_or_create() -> Self {
-        let mut config = Self::default();
-        let Some(path) = ensure_config_file() else {
-            return config;
-        };
-
-        if let Ok(contents) = fs::read_to_string(&path) {
-            config = Self::from_contents(&contents);
-        }
-
-        config
-    }
-
-    fn from_contents(contents: &str) -> Self {
+    pub fn from_contents(contents: &str) -> Self {
         let mut config = Self::default();
         let mut tab_title_priority_overridden = false;
         let mut in_colors_section = false;
@@ -808,6 +629,91 @@ impl AppConfig {
     }
 }
 
+pub fn parse_theme_id(value: &str) -> Option<ThemeId> {
+    let value = value.trim();
+    if value.is_empty() {
+        return None;
+    }
+
+    if let Some(canonical) = termy_themes::canonical_builtin_theme_id(value) {
+        return Some(canonical.to_string());
+    }
+
+    let normalized = termy_themes::normalize_theme_id(value);
+    if matches!(
+        normalized.as_str(),
+        "shell" | "shell-decide" | "let-shell-decide"
+    ) {
+        return Some(SHELL_DECIDE_THEME_ID.to_string());
+    }
+
+    if normalized.is_empty() {
+        None
+    } else {
+        Some(normalized)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorkingDirFallback {
+    Home,
+    Process,
+}
+
+impl WorkingDirFallback {
+    fn from_str(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "home" | "user" => Some(Self::Home),
+            "process" | "cwd" => Some(Self::Process),
+            _ => None,
+        }
+    }
+}
+
+impl Default for WorkingDirFallback {
+    fn default() -> Self {
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        {
+            Self::Home
+        }
+
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        {
+            Self::Process
+        }
+    }
+}
+
+pub fn config_path() -> Option<PathBuf> {
+    config_path_with(
+        |name| env::var(name).ok(),
+        env::current_dir().ok(),
+    )
+}
+
+fn config_path_with(get_var: impl Fn(&str) -> Option<String>, current_dir: Option<PathBuf>) -> Option<PathBuf> {
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(app_data) = get_var("APPDATA").filter(|v| !v.trim().is_empty()) {
+            return Some(Path::new(&app_data).join("termy").join("config.txt"));
+        }
+
+        if let Some(user_profile) = get_var("USERPROFILE").filter(|v| !v.trim().is_empty()) {
+            return Some(Path::new(&user_profile).join(".config/termy/config.txt"));
+        }
+    }
+
+    if let Some(xdg_config_home) = get_var("XDG_CONFIG_HOME").filter(|v| !v.trim().is_empty()) {
+        return Some(Path::new(&xdg_config_home).join("termy/config.txt"));
+    }
+
+    if let Some(home) = get_var("HOME").filter(|v| !v.trim().is_empty()) {
+        return Some(Path::new(&home).join(".config/termy/config.txt"));
+    }
+
+    current_dir.map(|dir| dir.join(".config/termy/config.txt"))
+}
+
 fn parse_bool(value: &str) -> Option<bool> {
     match value.trim().to_ascii_lowercase().as_str() {
         "true" | "1" | "yes" | "on" => Some(true),
@@ -847,25 +753,9 @@ fn parse_optional_string_value(value: &str) -> Option<String> {
     Some(parsed)
 }
 
-fn parse_hex_color(value: &str) -> Option<Rgba> {
-    let hex = value.trim().trim_start_matches('#');
-    if hex.len() != 6 {
-        return None;
-    }
-    let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
-    let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
-    let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
-    Some(Rgba {
-        r: r as f32 / 255.0,
-        g: g as f32 / 255.0,
-        b: b as f32 / 255.0,
-        a: 1.0,
-    })
-}
-
 fn parse_color_entry(colors: &mut CustomColors, key: &str, value: &str) {
     let key_lower = key.to_ascii_lowercase();
-    let color = match parse_hex_color(value) {
+    let color = match Rgb8::from_hex(value) {
         Some(c) => c,
         None => return,
     };
@@ -894,158 +784,6 @@ fn parse_color_entry(colors: &mut CustomColors, key: &str, value: &str) {
     }
 }
 
-pub fn import_colors_from_json(json_path: &Path) -> Result<String, String> {
-    let contents =
-        fs::read_to_string(json_path).map_err(|e| format!("Failed to read file: {}", e))?;
-
-    let json: serde_json::Value =
-        serde_json::from_str(&contents).map_err(|e| format!("Invalid JSON: {}", e))?;
-
-    let colors = json
-        .as_object()
-        .ok_or_else(|| "JSON must be an object".to_string())?;
-
-    let mut color_lines = Vec::new();
-
-    for (key, value) in colors {
-        if key.starts_with('$') {
-            continue;
-        }
-
-        let hex = value
-            .as_str()
-            .ok_or_else(|| format!("Color '{}' must be a hex string", key))?;
-
-        if parse_hex_color(hex).is_none() {
-            return Err(format!("Invalid hex color for '{}': {}", key, hex));
-        }
-
-        let config_key = match key.to_ascii_lowercase().as_str() {
-            "foreground" | "fg" => "foreground",
-            "background" | "bg" => "background",
-            "cursor" => "cursor",
-            "black" | "color0" => "black",
-            "red" | "color1" => "red",
-            "green" | "color2" => "green",
-            "yellow" | "color3" => "yellow",
-            "blue" | "color4" => "blue",
-            "magenta" | "color5" => "magenta",
-            "cyan" | "color6" => "cyan",
-            "white" | "color7" => "white",
-            "bright_black" | "brightblack" | "color8" => "bright_black",
-            "bright_red" | "brightred" | "color9" => "bright_red",
-            "bright_green" | "brightgreen" | "color10" => "bright_green",
-            "bright_yellow" | "brightyellow" | "color11" => "bright_yellow",
-            "bright_blue" | "brightblue" | "color12" => "bright_blue",
-            "bright_magenta" | "brightmagenta" | "color13" => "bright_magenta",
-            "bright_cyan" | "brightcyan" | "color14" => "bright_cyan",
-            "bright_white" | "brightwhite" | "color15" => "bright_white",
-            _ => continue,
-        };
-
-        color_lines.push(format!("{} = {}", config_key, hex));
-    }
-
-    if color_lines.is_empty() {
-        return Err("No valid colors found in JSON".to_string());
-    }
-    let color_count = color_lines.len();
-    update_config_contents(|existing| {
-        Ok((
-            replace_or_insert_section(existing, "colors", &color_lines),
-            (),
-        ))
-    })?;
-    Ok(format!("Imported {} colors", color_count))
-}
-
-pub fn set_theme_in_config(theme_id: &str) -> Result<String, String> {
-    let theme = parse_theme_id(theme_id).ok_or_else(|| "Invalid theme id".to_string())?;
-    update_config_contents(|existing| {
-        Ok((
-            upsert_theme_assignment(existing, &theme),
-            format!("Theme set to {}", theme),
-        ))
-    })
-}
-
-fn upsert_config_value(contents: &str, key: &str, value: &str) -> String {
-    let mut new_config = String::new();
-    let mut replaced = false;
-    let mut in_root_section = true;
-
-    for line in contents.lines() {
-        let trimmed = line.trim();
-        let is_section_header = trimmed.starts_with('[') && trimmed.ends_with(']');
-
-        if is_section_header {
-            if !replaced && in_root_section {
-                new_config.push_str(&format!("{} = {}\n", key, value));
-                replaced = true;
-            }
-            in_root_section = false;
-        }
-
-        if in_root_section && !trimmed.starts_with('#') {
-            let mut parts = trimmed.splitn(2, '=');
-            let line_key = parts.next().unwrap_or("").trim();
-            if line_key.eq_ignore_ascii_case(key) {
-                if !replaced {
-                    new_config.push_str(&format!("{} = {}\n", key, value));
-                    replaced = true;
-                }
-                continue;
-            }
-        }
-
-        new_config.push_str(line);
-        new_config.push('\n');
-    }
-
-    if !replaced {
-        if !new_config.is_empty() && !new_config.ends_with('\n') {
-            new_config.push('\n');
-        }
-        new_config.push_str(&format!("{} = {}\n", key, value));
-    }
-
-    new_config
-}
-
-pub fn set_config_value(key: &str, value: &str) -> Result<(), String> {
-    update_config_contents(|existing| Ok((upsert_config_value(existing, key, value), ())))
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WorkingDirFallback {
-    Home,
-    Process,
-}
-
-impl WorkingDirFallback {
-    fn from_str(value: &str) -> Option<Self> {
-        match value.trim().to_ascii_lowercase().as_str() {
-            "home" | "user" => Some(Self::Home),
-            "process" | "cwd" => Some(Self::Process),
-            _ => None,
-        }
-    }
-}
-
-impl Default for WorkingDirFallback {
-    fn default() -> Self {
-        #[cfg(any(target_os = "macos", target_os = "windows"))]
-        {
-            Self::Home
-        }
-
-        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-        {
-            Self::Process
-        }
-    }
-}
-
 fn parse_tab_title_priority(value: &str) -> Option<Vec<TabTitleSource>> {
     let mut priority = Vec::new();
     for token in value.split(',') {
@@ -1065,80 +803,9 @@ fn parse_tab_title_priority(value: &str) -> Option<Vec<TabTitleSource>> {
     Some(priority)
 }
 
-pub fn ensure_config_file() -> Option<PathBuf> {
-    let path = config_path()?;
-    if !path.exists() {
-        if let Some(parent) = path.parent() {
-            let _ = fs::create_dir_all(parent);
-        }
-        let _ = fs::write(&path, DEFAULT_CONFIG);
-    }
-    Some(path)
-}
-
-pub fn open_config_file() {
-    let Some(path) = ensure_config_file() else {
-        return;
-    };
-
-    #[cfg(target_os = "macos")]
-    {
-        let _ = Command::new("open").arg(&path).status();
-    }
-
-    #[cfg(target_os = "linux")]
-    {
-        let _ = Command::new("xdg-open").arg(&path).status();
-    }
-
-    #[cfg(target_os = "windows")]
-    {
-        let _ = Command::new("cmd")
-            .args(["/C", "start", "", path.to_string_lossy().as_ref()])
-            .status();
-    }
-}
-
-fn config_path() -> Option<PathBuf> {
-    #[cfg(target_os = "windows")]
-    {
-        if let Ok(app_data) = env::var("APPDATA")
-            && !app_data.trim().is_empty()
-        {
-            return Some(Path::new(&app_data).join("termy").join("config.txt"));
-        }
-
-        if let Ok(user_profile) = env::var("USERPROFILE")
-            && !user_profile.trim().is_empty()
-        {
-            return Some(Path::new(&user_profile).join(".config/termy/config.txt"));
-        }
-    }
-
-    if let Ok(xdg_config_home) = env::var("XDG_CONFIG_HOME")
-        && !xdg_config_home.trim().is_empty()
-    {
-        return Some(Path::new(&xdg_config_home).join("termy/config.txt"));
-    }
-
-    if let Ok(home) = env::var("HOME")
-        && !home.trim().is_empty()
-    {
-        return Some(Path::new(&home).join(".config/termy/config.txt"));
-    }
-
-    env::current_dir()
-        .ok()
-        .map(|dir| dir.join(".config/termy/config.txt"))
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{
-        AppConfig, CursorStyle, TabCloseVisibility, TabTitleMode, TabTitleSource, TabWidthMode,
-        TerminalScrollbarStyle, TerminalScrollbarVisibility, WorkingDirFallback,
-        replace_or_insert_section, upsert_theme_assignment,
-    };
+    use super::*;
 
     #[test]
     fn tab_title_mode_sets_default_priority() {
@@ -1474,15 +1141,11 @@ mod tests {
              color10 = #00ff00\n",
         );
 
-        let fg = config.colors.foreground.unwrap();
-        assert!((fg.r - 0.906).abs() < 0.01);
-        assert!((fg.g - 0.922).abs() < 0.01);
-        assert!((fg.b - 0.961).abs() < 0.01);
+        let fg = config.colors.foreground.expect("foreground color");
+        assert_eq!(fg, Rgb8 { r: 0xe7, g: 0xeb, b: 0xf5 });
 
-        let bg = config.colors.background.unwrap();
-        assert!((bg.r - 0.043).abs() < 0.01);
-        assert!((bg.g - 0.063).abs() < 0.01);
-        assert!((bg.b - 0.125).abs() < 0.01);
+        let bg = config.colors.background.expect("background color");
+        assert_eq!(bg, Rgb8 { r: 0x0b, g: 0x10, b: 0x20 });
 
         assert!(config.colors.cursor.is_some());
         assert!(config.colors.ansi[0].is_some());
@@ -1501,49 +1164,60 @@ mod tests {
     }
 
     #[test]
-    fn upsert_theme_assignment_replaces_existing_root_theme() {
-        let input = "theme = termy\nfont_size = 14\n";
-        let output = upsert_theme_assignment(input, "nord");
-        assert_eq!(output, "theme = nord\nfont_size = 14\n");
+    fn builtin_theme_aliases_canonicalize() {
+        let config = AppConfig::from_contents("theme = gruvbox\n");
+        assert_eq!(config.theme, "gruvbox-dark");
+
+        let config = AppConfig::from_contents("theme = tokyonight\n");
+        assert_eq!(config.theme, "tokyo-night");
     }
 
     #[test]
-    fn upsert_theme_assignment_inserts_before_first_section_when_missing() {
-        let input = "font_size = 14\n\n[colors]\nforeground = #ffffff\n";
-        let output = upsert_theme_assignment(input, "tokyo-night");
-        assert_eq!(
-            output,
-            "font_size = 14\n\ntheme = tokyo-night\n[colors]\nforeground = #ffffff\n"
-        );
+    fn config_path_prefers_xdg_then_home_then_cwd() {
+        let path = config_path_with(
+            |name| match name {
+                "XDG_CONFIG_HOME" => Some("/tmp/xdg".to_string()),
+                "HOME" => Some("/tmp/home".to_string()),
+                _ => None,
+            },
+            Some(PathBuf::from("/tmp/cwd")),
+        )
+        .expect("config path");
+
+        assert_eq!(path, PathBuf::from("/tmp/xdg/termy/config.txt"));
+
+        let path = config_path_with(
+            |name| match name {
+                "XDG_CONFIG_HOME" => None,
+                "HOME" => Some("/tmp/home".to_string()),
+                _ => None,
+            },
+            Some(PathBuf::from("/tmp/cwd")),
+        )
+        .expect("config path");
+
+        assert_eq!(path, PathBuf::from("/tmp/home/.config/termy/config.txt"));
+
+        let path = config_path_with(|_| None, Some(PathBuf::from("/tmp/cwd"))).expect("config path");
+        assert_eq!(path, PathBuf::from("/tmp/cwd/.config/termy/config.txt"));
     }
 
+    #[cfg(target_os = "windows")]
     #[test]
-    fn replace_or_insert_section_replaces_existing_section_body() {
-        let input = "theme = termy\n[colors]\nforeground = #ffffff\nbackground = #000000\n";
-        let output = replace_or_insert_section(
-            input,
-            "colors",
-            &[
-                "foreground = #111111".to_string(),
-                "cursor = #222222".to_string(),
-            ],
-        );
+    fn config_path_prefers_appdata_on_windows() {
+        let path = config_path_with(
+            |name| match name {
+                "APPDATA" => Some(r"C:\\Users\\alice\\AppData\\Roaming".to_string()),
+                "USERPROFILE" => Some(r"C:\\Users\\alice".to_string()),
+                _ => None,
+            },
+            None,
+        )
+        .expect("config path");
 
         assert_eq!(
-            output,
-            "theme = termy\n[colors]\nforeground = #111111\ncursor = #222222\n"
-        );
-    }
-
-    #[test]
-    fn replace_or_insert_section_appends_missing_section() {
-        let input = "theme = termy\nfont_size = 14\n";
-        let output =
-            replace_or_insert_section(input, "colors", &["foreground = #111111".to_string()]);
-
-        assert_eq!(
-            output,
-            "theme = termy\nfont_size = 14\n\n[colors]\nforeground = #111111\n"
+            path,
+            PathBuf::from(r"C:\\Users\\alice\\AppData\\Roaming\\termy\\config.txt")
         );
     }
 }

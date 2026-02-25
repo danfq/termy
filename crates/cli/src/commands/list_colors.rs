@@ -1,4 +1,4 @@
-use crate::config::{config_path, parse_theme_id};
+use termy_config_core::{AppConfig, config_path};
 
 // Theme color definitions (RGB values)
 struct ThemeColors {
@@ -321,7 +321,7 @@ pub fn run() {
     // Get current theme from config
     let theme_id = if let Some(path) = config_path() {
         if let Ok(contents) = std::fs::read_to_string(&path) {
-            parse_theme_id(&contents).unwrap_or_else(|| "termy".to_string())
+            AppConfig::from_contents(&contents).theme
         } else {
             "termy".to_string()
         }

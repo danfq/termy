@@ -260,7 +260,7 @@ pub struct SettingsWindow {
 
 impl SettingsWindow {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let config = AppConfig::load_or_create();
+        let config = config::load_or_create();
         let config_path = config::ensure_config_file();
         let config_fingerprint = config_path.as_ref().and_then(Self::config_fingerprint);
         let config_change_rx = config::subscribe_config_changes();
@@ -669,7 +669,7 @@ impl SettingsWindow {
         }
 
         self.config_fingerprint = Some(fingerprint);
-        let config = AppConfig::load_or_create();
+        let config = config::load_or_create();
         self.apply_runtime_config(config)
     }
 

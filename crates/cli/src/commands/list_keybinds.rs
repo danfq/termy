@@ -1,4 +1,4 @@
-use crate::config::{config_path, parse_keybind_lines};
+use termy_config_core::{AppConfig, KeybindConfigLine, config_path};
 
 struct DefaultKeybind {
     trigger: &'static str,
@@ -127,7 +127,8 @@ pub fn run() {
     // Apply user config overrides
     if let Some(path) = config_path() {
         if let Ok(contents) = std::fs::read_to_string(&path) {
-            let directives = parse_keybind_lines(&contents);
+            let config = AppConfig::from_contents(&contents);
+            let directives = parse_keybind_lines(&config.keybind_lines);
             for directive in directives {
                 match directive {
                     KeybindDirective::Clear => keybinds.clear(),
@@ -154,4 +155,33 @@ pub enum KeybindDirective {
     Clear,
     Bind { trigger: String, action: String },
     Unbind { trigger: String },
+}
+
+pub fn parse_keybind_lines(lines: &[KeybindConfigLine]) -> Vec<KeybindDirective> {
+    let mut directives = Vec::new();
+
+    for line in lines {
+        let value = line.value.trim();
+        if value.eq_ignore_ascii_case("clear") {
+            directives.push(KeybindDirective::Clear);
+            continue;
+        }
+
+        if let Some((trigger, action)) = value.split_once('=') {
+            let trigger = trigger.trim().to_string();
+            let action = action.trim().to_string();
+
+            if trigger.is_empty() || action.is_empty() {
+                continue;
+            }
+
+            if action.eq_ignore_ascii_case("unbind") {
+                directives.push(KeybindDirective::Unbind { trigger });
+            } else {
+                directives.push(KeybindDirective::Bind { trigger, action });
+            }
+        }
+    }
+
+    directives
 }

@@ -11,7 +11,7 @@ use std::io::{self, stdout};
 
 use crate::commands::list_keybinds::KeybindDirective;
 use crate::commands::validate_config;
-use crate::config::{config_path, parse_keybind_lines, parse_theme_id};
+use termy_config_core::{AppConfig, config_path};
 
 #[derive(Clone, Copy, PartialEq)]
 enum MenuItem {
@@ -313,7 +313,7 @@ fn get_list_themes_content() -> Vec<String> {
 fn get_list_colors_content() -> Vec<String> {
     let theme_id = if let Some(path) = config_path() {
         if let Ok(contents) = std::fs::read_to_string(&path) {
-            parse_theme_id(&contents).unwrap_or_else(|| "termy".to_string())
+            AppConfig::from_contents(&contents).theme
         } else {
             "termy".to_string()
         }
@@ -456,7 +456,8 @@ fn get_list_keybinds_content() -> Vec<String> {
     // Apply user config overrides
     if let Some(path) = config_path() {
         if let Ok(contents) = std::fs::read_to_string(&path) {
-            let directives = parse_keybind_lines(&contents);
+            let config = AppConfig::from_contents(&contents);
+            let directives = crate::commands::list_keybinds::parse_keybind_lines(&config.keybind_lines);
             for directive in directives {
                 match directive {
                     KeybindDirective::Clear => keybinds.clear(),

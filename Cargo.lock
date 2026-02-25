@@ -5504,6 +5504,7 @@ dependencies = [
  "smol",
  "termy_auto_update",
  "termy_auto_update_ui",
+ "termy_config_core",
  "termy_native_sdk",
  "termy_search",
  "termy_terminal_ui",
@@ -5546,7 +5547,15 @@ dependencies = [
  "ratatui",
  "semver",
  "serde",
+ "termy_config_core",
  "ureq",
+]
+
+[[package]]
+name = "termy_config_core"
+version = "0.1.0"
+dependencies = [
+ "termy_themes",
 ]
 
 [[package]]

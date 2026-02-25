@@ -92,7 +92,7 @@ fn main() {
             .ok();
         });
 
-        let app_config = config::AppConfig::load_or_create();
+        let app_config = config::load_or_create();
         keybindings::install_keybindings(cx, &app_config);
         let window_background = initial_window_background_appearance(&app_config);
         let window_width = app_config.window_width;

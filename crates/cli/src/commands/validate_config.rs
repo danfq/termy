@@ -1,40 +1,4 @@
-use crate::config::config_path;
-
-const VALID_KEYS: &[&str] = &[
-    "theme",
-    "font_family",
-    "font_size",
-    "term",
-    "colorterm",
-    "shell",
-    "working_dir",
-    "cursor_style",
-    "cursor_blink",
-    "background_opacity",
-    "background_blur",
-    "padding_x",
-    "padding_y",
-    "mouse_scroll_multiplier",
-    "window_width",
-    "window_height",
-    "terminal_scrollbar_visibility",
-    "terminal_scrollbar_style",
-    "scrollback_history",
-    "inactive_tab_scrollback",
-    "warn_on_quit_with_running_process",
-    "command_palette_show_keybinds",
-    "keybind",
-    "tab_title_mode",
-    "tab_title_fallback",
-    "tab_title_explicit_prefix",
-    "tab_title_shell_integration",
-    "tab_title_prompt_format",
-    "tab_title_command_format",
-    "tab_close_visibility",
-    "tab_width_mode",
-];
-
-const VALID_SECTIONS: &[&str] = &["colors", "tab_title"];
+use termy_config_core::{VALID_ROOT_KEYS, VALID_SECTIONS, config_path};
 
 const VALID_ACTIONS: &[&str] = &[
     "new_tab",
@@ -186,7 +150,7 @@ pub fn validate_contents(contents: &str) -> ValidationReport {
             }
 
             // Check if key is valid
-            if !VALID_KEYS.contains(&key) {
+            if !VALID_ROOT_KEYS.contains(&key) {
                 warnings.push(format!("Line {}: Unknown key '{}'", line_num, key));
                 continue;
             }

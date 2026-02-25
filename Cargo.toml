@@ -1,6 +1,7 @@
 [workspace]
 members = [
   ".",
+  "crates/config_core",
   "crates/native_sdk",
   "crates/auto_update",
   "crates/auto_update_ui",
@@ -56,6 +57,7 @@ termy_terminal_ui = { path = "crates/terminal_ui" }
 termy_toast = { path = "crates/toast_sdk" }
 termy_search = { path = "crates/search" }
 termy_native_sdk = { path = "crates/native_sdk" }
+termy_config_core = { path = "crates/config_core" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # Pin core-text to 21.0.0 to avoid core-graphics version conflict on macOS.
