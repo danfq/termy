@@ -16,6 +16,7 @@ crossterm = "0.28"
 ureq = { version = "2", features = ["json"] }
 serde = { version = "1", features = ["derive"] }
 semver = "1"
+termy_config_core = { path = "../config_core" }
 
 # For list-fonts (platform-specific)
 [target.'cfg(target_os = "macos")'.dependencies]

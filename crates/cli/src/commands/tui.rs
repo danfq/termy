@@ -11,7 +11,7 @@ use std::io::{self, stdout};
 
 use crate::commands::list_keybinds::KeybindDirective;
 use crate::commands::validate_config;
-use crate::config::{config_path, parse_keybind_lines, parse_theme_id};
+use termy_config_core::{AppConfig, config_path};
 
 #[derive(Clone, Copy, PartialEq)]
 enum MenuItem {
@@ -178,12 +178,12 @@ fn get_show_config_content() -> Vec<String> {
         lines.push("  font_family = JetBrains Mono".to_string());
         lines.push("  font_size = 14".to_string());
         lines.push("  term = xterm-256color".to_string());
-        lines.push("  cursor_style = line".to_string());
+        lines.push("  cursor_style = block".to_string());
         lines.push("  cursor_blink = true".to_string());
         lines.push("  background_opacity = 1.0".to_string());
         lines.push("  padding_x = 12".to_string());
         lines.push("  padding_y = 8".to_string());
-        lines.push("  scrollback_history = 10000".to_string());
+        lines.push("  scrollback_history = 2000".to_string());
         return lines;
     }
 
@@ -313,7 +313,7 @@ fn get_list_themes_content() -> Vec<String> {
 fn get_list_colors_content() -> Vec<String> {
     let theme_id = if let Some(path) = config_path() {
         if let Ok(contents) = std::fs::read_to_string(&path) {
-            parse_theme_id(&contents).unwrap_or_else(|| "termy".to_string())
+            AppConfig::from_contents(&contents).theme
         } else {
             "termy".to_string()
         }
@@ -456,7 +456,9 @@ fn get_list_keybinds_content() -> Vec<String> {
     // Apply user config overrides
     if let Some(path) = config_path() {
         if let Ok(contents) = std::fs::read_to_string(&path) {
-            let directives = parse_keybind_lines(&contents);
+            let config = AppConfig::from_contents(&contents);
+            let directives =
+                crate::commands::list_keybinds::parse_keybind_lines(&config.keybind_lines);
             for directive in directives {
                 match directive {
                     KeybindDirective::Clear => keybinds.clear(),

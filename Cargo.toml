@@ -1,6 +1,7 @@
 [workspace]
 members = [
   ".",
+  "crates/config_core",
   "crates/native_sdk",
   "crates/auto_update",
   "crates/auto_update_ui",
@@ -48,6 +49,10 @@ rfd = "0.15"
 # JSON parsing
 serde_json = "1.0"
 
+# File I/O
+tempfile = "3"
+fs4 = { version = "0.13.1", features = ["sync"] }
+
 # Termy Workspace Crates
 termy_auto_update = { path = "crates/auto_update" }
 termy_auto_update_ui = { path = "crates/auto_update_ui" }
@@ -56,6 +61,7 @@ termy_terminal_ui = { path = "crates/terminal_ui" }
 termy_toast = { path = "crates/toast_sdk" }
 termy_search = { path = "crates/search" }
 termy_native_sdk = { path = "crates/native_sdk" }
+termy_config_core = { path = "crates/config_core" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # Pin core-text to 21.0.0 to avoid core-graphics version conflict on macOS.

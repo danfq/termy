@@ -62,17 +62,17 @@ impl TerminalColors {
 
     fn apply_custom(&mut self, custom: &CustomColors) {
         if let Some(fg) = custom.foreground {
-            self.foreground = fg;
+            self.foreground = rgba(fg.r, fg.g, fg.b);
         }
         if let Some(bg) = custom.background {
-            self.background = bg;
+            self.background = rgba(bg.r, bg.g, bg.b);
         }
         if let Some(cursor) = custom.cursor {
-            self.cursor = cursor;
+            self.cursor = rgba(cursor.r, cursor.g, cursor.b);
         }
         for (i, color) in custom.ansi.iter().enumerate() {
             if let Some(c) = color {
-                self.ansi[i] = *c;
+                self.ansi[i] = rgba(c.r, c.g, c.b);
             }
         }
     }

@@ -1,5 +1,5 @@
-use crate::config::config_path;
 use std::process::Command;
+use termy_config_core::config_path;
 
 pub fn run() {
     let path = match config_path() {

@@ -1,4 +1,4 @@
-use crate::config::config_path;
+use termy_config_core::config_path;
 
 pub fn run() {
     let path = match config_path() {
@@ -45,10 +45,10 @@ fn print_defaults() {
     println!("font_family = JetBrains Mono");
     println!("font_size = 14");
     println!("term = xterm-256color");
-    println!("cursor_style = line");
+    println!("cursor_style = block");
     println!("cursor_blink = true");
     println!("background_opacity = 1.0");
     println!("padding_x = 12");
     println!("padding_y = 8");
-    println!("scrollback_history = 10000");
+    println!("scrollback_history = 2000");
 }
