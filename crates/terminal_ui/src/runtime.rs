@@ -337,10 +337,11 @@ fn utf8_locale_override_plan(
     lc_ctype: Option<&str>,
     lang: Option<&str>,
 ) -> Utf8LocaleOverridePlan {
-    let has_utf8_locale = [lc_all, lc_ctype, lang]
-        .into_iter()
-        .flatten()
-        .any(locale_has_utf8_tag);
+    // Follow POSIX locale precedence for classification decisions:
+    // LC_ALL overrides LC_CTYPE and LANG; LC_CTYPE overrides LANG.
+    // We therefore evaluate UTF-8 status from only the single effective locale.
+    let has_utf8_locale = effective_locale_for_decision(lc_all, lc_ctype, lang)
+        .is_some_and(locale_has_utf8_tag);
     if has_utf8_locale {
         return Utf8LocaleOverridePlan::None;
     }
@@ -350,6 +351,19 @@ fn utf8_locale_override_plan(
     } else {
         Utf8LocaleOverridePlan::LcCtypeOnly
     }
+}
+
+#[cfg(unix)]
+fn effective_locale_for_decision<'a>(
+    lc_all: Option<&'a str>,
+    lc_ctype: Option<&'a str>,
+    lang: Option<&'a str>,
+) -> Option<&'a str> {
+    [lc_all, lc_ctype, lang]
+        .into_iter()
+        .flatten()
+        .map(str::trim)
+        .find(|value| !value.is_empty())
 }
 
 #[cfg(unix)]
@@ -928,6 +942,19 @@ mod tests {
         assert_eq!(
             super::utf8_locale_override_plan(Some("en_US.UTF-8"), Some("C"), Some("")),
             super::Utf8LocaleOverridePlan::None
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn locale_override_plan_prefers_lc_all_over_lang() {
+        assert_eq!(
+            super::utf8_locale_override_plan(
+                Some("fr_FR.ISO8859-1"),
+                Some("C"),
+                Some("en_US.UTF-8")
+            ),
+            super::Utf8LocaleOverridePlan::LcAllAndLcCtype
         );
     }
 
