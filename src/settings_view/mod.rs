@@ -156,6 +156,7 @@ impl SettingsWindow {
         })
         .detach();
 
+        // Fallback polling in case filesystem notifications are coalesced/missed.
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             loop {
                 smol::Timer::after(Duration::from_millis(SETTINGS_CONFIG_WATCH_INTERVAL_MS)).await;

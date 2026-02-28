@@ -1,5 +1,6 @@
 use super::*;
 
+const MAX_THEME_SUGGESTIONS: usize = 16;
 const MAX_FONT_SUGGESTIONS: usize = 200;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -687,7 +688,9 @@ impl SettingsWindow {
                 .inactive_tab_scrollback
                 .map(|value| value.to_string())
                 .unwrap_or_default(),
-            EditableField::ScrollMultiplier => format!("{}", self.config.mouse_scroll_multiplier),
+            EditableField::ScrollMultiplier => {
+                format!("{:.3}", self.config.mouse_scroll_multiplier)
+            }
             EditableField::CursorStyle => match self.config.cursor_style {
                 termy_config_core::CursorStyle::Line => "line",
                 termy_config_core::CursorStyle::Block => "block",
@@ -892,7 +895,7 @@ impl SettingsWindow {
         let themes = self.ordered_theme_ids_for_settings();
 
         if normalized.is_empty() {
-            return themes.into_iter().take(16).collect();
+            return themes.into_iter().take(MAX_THEME_SUGGESTIONS).collect();
         }
 
         let mut matched = Vec::new();
@@ -906,7 +909,10 @@ impl SettingsWindow {
             }
         }
         matched.extend(rest);
-        matched.into_iter().take(16).collect()
+        matched
+            .into_iter()
+            .take(MAX_THEME_SUGGESTIONS)
+            .collect()
     }
 
     pub(super) fn filtered_font_suggestions(&self, query: &str) -> Vec<String> {

@@ -73,8 +73,9 @@ impl SettingsWindow {
                 if value.is_empty() {
                     return Err("Font family cannot be empty".to_string());
                 }
+                config::set_root_setting(termy_config_core::RootSettingId::FontFamily, value)?;
                 self.config.font_family = value.to_string();
-                config::set_root_setting(termy_config_core::RootSettingId::FontFamily, value)
+                Ok(())
             }
             EditableField::FontSize => {
                 let parsed = value

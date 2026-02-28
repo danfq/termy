@@ -149,7 +149,8 @@ pub fn apply_color_updates(contents: &str, updates: &[ColorSettingUpdate]) -> St
             let section = trimmed[1..trimmed.len() - 1].trim().to_ascii_lowercase();
             if section == "colors" {
                 if saw_colors_section {
-                    in_colors = false;
+                    in_colors = true;
+                    out.push("[colors]".to_string());
                     continue;
                 }
                 saw_colors_section = true;
@@ -283,5 +284,18 @@ mod tests {
         );
         assert!(output.contains("foreground = #abcdef"));
         assert!(output.contains("red = #222222"));
+    }
+
+    #[test]
+    fn apply_color_updates_handles_duplicate_colors_sections() {
+        let input = "theme = termy\n[colors]\nforeground = #111111\n[colors]\nred = #222222\n";
+        let output = apply_color_updates(
+            input,
+            &[ColorSettingUpdate {
+                id: ColorSettingId::Foreground,
+                value: Some("#abcdef".to_string()),
+            }],
+        );
+        assert!(output.contains("[colors]\nforeground = #abcdef\n[colors]\nred = #222222\n"));
     }
 }
