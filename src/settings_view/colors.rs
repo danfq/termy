@@ -27,6 +27,8 @@ impl SettingsWindow {
             .child(self.render_section_header(
                 "Colors",
                 "Override individual terminal colors",
+                SettingsSection::Colors,
+                cx,
             ))
             .child(self.render_group_header("OVERRIDES"))
             .children(rows)

@@ -9,7 +9,8 @@ use std::{
 use fs4::fs_std::FileExt;
 use termy_config_core::{
     ColorSettingId, ColorSettingUpdate, RootSettingId, Rgb8, apply_color_updates,
-    color_setting_from_key, color_setting_spec, parse_theme_id, replace_keybind_lines,
+    color_setting_from_key, color_setting_spec, parse_theme_id,
+    remove_root_setting as remove_root_setting_entry, replace_keybind_lines,
     upsert_root_setting,
 };
 
@@ -94,6 +95,10 @@ fn update_config_contents<R>(
 
 pub fn set_root_setting(setting: RootSettingId, value: &str) -> Result<(), String> {
     update_config_contents(|existing| Ok((upsert_root_setting(existing, setting, value), ())))
+}
+
+pub fn remove_root_setting(setting: RootSettingId) -> Result<(), String> {
+    update_config_contents(|existing| Ok((remove_root_setting_entry(existing, setting), ())))
 }
 
 pub fn set_theme_in_config(theme_id: &str) -> Result<String, String> {

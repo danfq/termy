@@ -11,7 +11,8 @@ mod types;
 pub use color_keys::{ColorEntryError, apply_color_entry, canonical_color_key};
 pub use constants::{SHELL_DECIDE_THEME_ID, VALID_ROOT_KEYS, VALID_SECTIONS};
 pub use document::{
-    ColorSettingUpdate, apply_color_updates, replace_keybind_lines, upsert_root_setting,
+    ColorSettingUpdate, apply_color_updates, remove_root_setting, replace_keybind_lines,
+    upsert_root_setting,
 };
 pub use diagnostics::{ConfigDiagnostic, ConfigDiagnosticKind, ConfigParseReport};
 pub use parser::parse_theme_id;

@@ -15,8 +15,10 @@ use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 use termy_config_core::{
     RootSettingId, RootSettingValueKind, SettingsSection as CoreSettingsSection,
-    color_setting_specs, root_setting_enum_choices, root_setting_specs, root_setting_value_kind,
+    color_setting_from_key, color_setting_specs, root_setting_default_value,
+    root_setting_enum_choices, root_setting_from_key, root_setting_specs, root_setting_value_kind,
 };
+use termy_command_core::CommandId;
 
 mod colors;
 mod components;
@@ -27,9 +29,10 @@ mod state;
 mod style;
 
 const SIDEBAR_WIDTH: f32 = 220.0;
-const NUMERIC_INPUT_WIDTH: f32 = 220.0;
-const NUMERIC_INPUT_HEIGHT: f32 = 34.0;
-const NUMERIC_STEP_BUTTON_SIZE: f32 = 24.0;
+const SETTINGS_CONTROL_WIDTH: f32 = 360.0;
+const SETTINGS_CONTROL_HEIGHT: f32 = 36.0;
+const NUMERIC_STEP_BUTTON_SIZE: f32 = 26.0;
+const SETTINGS_INPUT_TEXT_SIZE: f32 = 13.0;
 const SETTINGS_CONFIG_WATCH_INTERVAL_MS: u64 = 750;
 const SETTINGS_SEARCH_NAV_THROTTLE_MS: u64 = 70;
 const SETTINGS_SCROLL_ANIMATION_DURATION_MS: u64 = 170;
@@ -40,6 +43,14 @@ const SETTINGS_SCROLLBAR_TRACK_ALPHA: f32 = 0.10;
 const SETTINGS_SCROLLBAR_THUMB_ALPHA: f32 = 0.42;
 const SETTINGS_SCROLLBAR_THUMB_ACTIVE_ALPHA: f32 = 0.58;
 const SETTINGS_OVERLAY_PANEL_ALPHA_FLOOR_RATIO: f32 = 0.72;
+const SETTINGS_SWITCH_WIDTH: f32 = 48.0;
+const SETTINGS_SWITCH_HEIGHT: f32 = 26.0;
+const SETTINGS_SWITCH_KNOB_SIZE: f32 = 20.0;
+const SETTINGS_SEARCH_PREVIEW_LIMIT: usize = 6;
+const SETTINGS_SLIDER_VALUE_WIDTH: f32 = 60.0;
+const SETTINGS_OPACITY_STEP_RATIO: f32 = 0.05;
+const SETTINGS_CONTROL_INNER_PADDING: f32 = 8.0;
+const SETTINGS_OPACITY_CONTROL_GAP: f32 = 6.0;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum EditableField {
@@ -66,7 +77,6 @@ enum EditableField {
     TabTitleCommandFormat,
     TabCloseVisibility,
     TabWidthMode,
-    KeybindDirectives,
     WorkingDirectory,
     WorkingDirFallback,
     WindowWidth,
@@ -203,6 +213,8 @@ pub struct SettingsWindow {
     sidebar_search_selecting: bool,
     search_navigation_last_target: Option<&'static str>,
     search_navigation_last_jump_at: Option<Instant>,
+    capturing_action: Option<CommandId>,
+    background_opacity_drag_anchor: Option<(f32, f32)>,
     scroll_animation_token: u64,
     colors: TerminalColors,
     last_window_background_appearance: Option<WindowBackgroundAppearance>,
@@ -310,6 +322,8 @@ impl SettingsWindow {
             sidebar_search_selecting: false,
             search_navigation_last_target: None,
             search_navigation_last_jump_at: None,
+            capturing_action: None,
+            background_opacity_drag_anchor: None,
             scroll_animation_token: 0,
             colors,
             last_window_background_appearance: None,
@@ -362,6 +376,55 @@ impl SettingsWindow {
             SettingsSection::Colors => "Colors",
             SettingsSection::Keybindings => "Keybindings",
         }
+    }
+
+    fn settings_sections_in_order() -> [SettingsSection; 6] {
+        [
+            SettingsSection::Appearance,
+            SettingsSection::Terminal,
+            SettingsSection::Tabs,
+            SettingsSection::Advanced,
+            SettingsSection::Colors,
+            SettingsSection::Keybindings,
+        ]
+    }
+
+    fn set_active_section(
+        &mut self,
+        section: SettingsSection,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.active_section = section;
+        self.active_input = None;
+        self.capturing_action = None;
+        self.blur_sidebar_search();
+        self.scroll_animation_token = self.scroll_animation_token.wrapping_add(1);
+        self.content_scroll_handle.set_offset(point(px(0.0), px(0.0)));
+        self.request_scrollbar_refresh_frames(3, window, cx);
+    }
+
+    fn cycle_active_section(
+        &mut self,
+        reverse: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let sections = Self::settings_sections_in_order();
+        let current_index = sections
+            .iter()
+            .position(|section| *section == self.active_section)
+            .unwrap_or(0);
+        let next_index = if reverse {
+            if current_index == 0 {
+                sections.len() - 1
+            } else {
+                current_index - 1
+            }
+        } else {
+            (current_index + 1) % sections.len()
+        };
+        self.set_active_section(sections[next_index], window, cx);
     }
 
     fn build_searchable_settings() -> Vec<SearchableSetting> {
@@ -499,6 +562,124 @@ impl SettingsWindow {
             .collect()
     }
 
+    fn setting_matches_sidebar_query(&self, setting_key: &'static str) -> bool {
+        let query = self.sidebar_search_state.text().trim().to_ascii_lowercase();
+        if query.is_empty() {
+            return false;
+        }
+        let terms: Vec<&str> = query.split_whitespace().collect();
+        self.searchable_setting_by_key(setting_key)
+            .is_some_and(|setting| Self::setting_search_score(setting, &query, &terms).is_some())
+    }
+
+    fn default_root_setting_value(setting: RootSettingId) -> Option<String> {
+        let defaults = AppConfig::default();
+        root_setting_default_value(&defaults, setting)
+    }
+
+    fn reset_root_setting_to_default(&mut self, setting: RootSettingId) -> Result<(), String> {
+        if let Some(default_value) = Self::default_root_setting_value(setting) {
+            config::set_root_setting(setting, &default_value)
+        } else {
+            config::remove_root_setting(setting)
+        }
+    }
+
+    fn reset_setting_to_default(&mut self, setting_key: &'static str, cx: &mut Context<Self>) {
+        let result = if let Some(setting) = root_setting_from_key(setting_key) {
+            self.reset_root_setting_to_default(setting)
+        } else if let Some(color_setting) = color_setting_from_key(setting_key) {
+            config::set_color_setting(color_setting, None)
+        } else {
+            return;
+        };
+
+        match result {
+            Ok(()) => {
+                let _ = self.reload_config_if_changed(cx);
+                self.active_input = None;
+                self.capturing_action = None;
+                termy_toast::success("Reset to default");
+                cx.notify();
+            }
+            Err(error) => termy_toast::error(error),
+        }
+    }
+
+    fn reset_section_to_defaults(&mut self, section: SettingsSection, cx: &mut Context<Self>) {
+        if section == SettingsSection::Keybindings {
+            self.reset_keybinds_to_defaults(cx);
+            return;
+        }
+
+        let result = match section {
+            SettingsSection::Appearance => [
+                RootSettingId::Theme,
+                RootSettingId::BackgroundBlur,
+                RootSettingId::BackgroundOpacity,
+                RootSettingId::FontFamily,
+                RootSettingId::FontSize,
+                RootSettingId::PaddingX,
+                RootSettingId::PaddingY,
+            ]
+            .into_iter()
+            .try_for_each(|setting| self.reset_root_setting_to_default(setting)),
+            SettingsSection::Terminal => [
+                RootSettingId::CursorBlink,
+                RootSettingId::CursorStyle,
+                RootSettingId::Shell,
+                RootSettingId::Term,
+                RootSettingId::Colorterm,
+                RootSettingId::ScrollbackHistory,
+                RootSettingId::InactiveTabScrollback,
+                RootSettingId::MouseScrollMultiplier,
+                RootSettingId::ScrollbarVisibility,
+                RootSettingId::ScrollbarStyle,
+                RootSettingId::CommandPaletteShowKeybinds,
+            ]
+            .into_iter()
+            .try_for_each(|setting| self.reset_root_setting_to_default(setting)),
+            SettingsSection::Tabs => [
+                RootSettingId::TabTitleMode,
+                RootSettingId::TabTitleShellIntegration,
+                RootSettingId::TabTitleFallback,
+                RootSettingId::TabTitlePriority,
+                RootSettingId::TabTitleExplicitPrefix,
+                RootSettingId::TabTitlePromptFormat,
+                RootSettingId::TabTitleCommandFormat,
+                RootSettingId::TabCloseVisibility,
+                RootSettingId::TabWidthMode,
+                RootSettingId::ShowTermyInTitlebar,
+            ]
+            .into_iter()
+            .try_for_each(|setting| self.reset_root_setting_to_default(setting)),
+            SettingsSection::Advanced => [
+                RootSettingId::WorkingDir,
+                RootSettingId::WorkingDirFallback,
+                RootSettingId::WarnOnQuitWithRunningProcess,
+                RootSettingId::WindowWidth,
+                RootSettingId::WindowHeight,
+            ]
+            .into_iter()
+            .try_for_each(|setting| self.reset_root_setting_to_default(setting)),
+            SettingsSection::Colors => color_setting_specs()
+                .iter()
+                .try_for_each(|spec| config::set_color_setting(spec.id, None)),
+            SettingsSection::Keybindings => Ok(()),
+        };
+
+        match result {
+            Ok(()) => {
+                let _ = self.reload_config_if_changed(cx);
+                self.active_input = None;
+                self.capturing_action = None;
+                termy_toast::success("Section reset to defaults");
+                cx.notify();
+            }
+            Err(error) => termy_toast::error(error),
+        }
+    }
+
     fn wrap_setting_with_scroll_anchor(
         &self,
         setting_key: &'static str,
@@ -583,6 +764,7 @@ impl SettingsWindow {
 
         self.active_section = setting.metadata.section;
         self.active_input = None;
+        self.capturing_action = None;
         self.sidebar_search_active = true;
         self.sidebar_search_selecting = false;
         if !self.focus_handle.is_focused(window) {
@@ -747,7 +929,7 @@ impl SettingsWindow {
 
     fn bg_input(&self) -> Rgba {
         let mut c = self.colors.background;
-        c.a = self.adaptive_panel_alpha(0.3);
+        c.a = self.adaptive_panel_alpha(0.36);
         c
     }
 
@@ -769,19 +951,19 @@ impl SettingsWindow {
 
     fn text_secondary(&self) -> Rgba {
         let mut c = self.colors.foreground;
-        c.a = 0.7;
+        c.a = 0.82;
         c
     }
 
     fn text_muted(&self) -> Rgba {
         let mut c = self.colors.foreground;
-        c.a = 0.5;
+        c.a = 0.68;
         c
     }
 
     fn border_color(&self) -> Rgba {
         let mut c = self.colors.foreground;
-        c.a = 0.15;
+        c.a = 0.24;
         c
     }
 
@@ -833,6 +1015,25 @@ impl SettingsWindow {
         };
 
         ui_scrollbar::compute_metrics(range, SETTINGS_SCROLLBAR_MIN_THUMB_HEIGHT)
+    }
+
+    fn request_scrollbar_refresh_frames(
+        &mut self,
+        frames_remaining: u8,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if frames_remaining == 0 {
+            return;
+        }
+
+        let this = cx.entity().downgrade();
+        window.on_next_frame(move |window, cx| {
+            let _ = this.update(cx, |view, cx| {
+                cx.notify();
+                view.request_scrollbar_refresh_frames(frames_remaining - 1, window, cx);
+            });
+        });
     }
 
     fn srgb_to_linear(channel: f32) -> f32 {
@@ -888,7 +1089,10 @@ impl SettingsWindow {
 
     fn render_sidebar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         div()
+            .flex_none()
             .w(px(SIDEBAR_WIDTH))
+            .min_w(px(SIDEBAR_WIDTH))
+            .max_w(px(SIDEBAR_WIDTH))
             .h_full()
             .bg(self.bg_secondary())
             .border_r_1()
@@ -928,11 +1132,18 @@ impl SettingsWindow {
         let query_text = self.sidebar_search_state.text().to_string();
         let has_query = !query_text.trim().is_empty();
         let is_active = self.sidebar_search_active;
+        let all_results = if has_query {
+            self.sidebar_search_results(self.searchable_settings.len())
+        } else {
+            Vec::new()
+        };
+        let total_results = all_results.len();
         let text_secondary = self.text_secondary();
         let text_muted = self.text_muted();
         let bg_input = self.bg_input();
         let border_color = self.border_color();
         let accent = self.accent();
+        let hover_bg = self.bg_hover();
 
         let search_content = if is_active {
             let font = Font {
@@ -943,7 +1154,7 @@ impl SettingsWindow {
                 cx.entity(),
                 self.focus_handle.clone(),
                 font,
-                px(13.0),
+                px(SETTINGS_INPUT_TEXT_SIZE),
                 text_secondary.into(),
                 self.accent_with_alpha(0.3).into(),
                 TextInputAlignment::Left,
@@ -951,19 +1162,19 @@ impl SettingsWindow {
             .into_any_element()
         } else if has_query {
             div()
-                .text_sm()
+                .text_size(px(SETTINGS_INPUT_TEXT_SIZE))
                 .text_color(text_secondary)
                 .child(query_text.clone())
                 .into_any_element()
         } else {
             div()
-                .text_sm()
+                .text_size(px(SETTINGS_INPUT_TEXT_SIZE))
                 .text_color(text_muted)
                 .child("Search settings...")
                 .into_any_element()
         };
 
-        let search_container = div().id("settings-sidebar-search").px_3().pb_3().child(
+        let mut search_container = div().id("settings-sidebar-search").px_3().pb_3().child(
             div()
                 .id("settings-sidebar-search-input")
                 .h(px(36.0))
@@ -1038,6 +1249,57 @@ impl SettingsWindow {
                 ),
         );
 
+        if has_query {
+            let summary = if total_results == 1 {
+                "1 match".to_string()
+            } else {
+                format!("{total_results} matches")
+            };
+            search_container = search_container.child(
+                div()
+                    .px_1()
+                    .text_xs()
+                    .text_color(text_muted)
+                    .child(summary),
+            );
+
+            if total_results > 0 {
+                let mut preview = div().flex().flex_col().gap(px(2.0));
+                for setting in all_results.into_iter().take(SETTINGS_SEARCH_PREVIEW_LIMIT) {
+                    let key = setting.metadata.key;
+                    let section_label = Self::settings_section_label(setting.metadata.section);
+                    preview = preview.child(
+                        div()
+                            .id(SharedString::from(format!("search-preview-{key}")))
+                            .px_2()
+                            .py_1()
+                            .rounded(px(0.0))
+                            .bg(bg_input)
+                            .border_1()
+                            .border_color(border_color)
+                            .cursor_pointer()
+                            .hover(move |s| s.bg(hover_bg))
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(text_secondary)
+                                    .child(setting.metadata.title),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(text_muted)
+                                    .child(section_label),
+                            )
+                            .on_click(cx.listener(move |view, _, window, cx| {
+                                view.jump_to_setting(key, window, cx);
+                            })),
+                    );
+                }
+                search_container = search_container.child(preview);
+            }
+        }
+
         search_container
     }
 
@@ -1099,12 +1361,13 @@ impl SettingsWindow {
                         .bg(accent),
                 )
             })
-            .on_click(cx.listener(move |view, _, _, cx| {
-                view.active_section = section;
-                view.active_input = None;
-                view.blur_sidebar_search();
-                cx.notify();
-            }))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |view, _event: &MouseDownEvent, window, cx| {
+                    view.set_active_section(section, window, cx);
+                    cx.notify();
+                }),
+            )
     }
 
     fn root_setting_for_editable_field(field: EditableField) -> Option<RootSettingId> {
@@ -1136,7 +1399,7 @@ impl SettingsWindow {
             EditableField::WorkingDirFallback => Some(RootSettingId::WorkingDirFallback),
             EditableField::WindowWidth => Some(RootSettingId::WindowWidth),
             EditableField::WindowHeight => Some(RootSettingId::WindowHeight),
-            EditableField::KeybindDirectives | EditableField::Color(_) => None,
+            EditableField::Color(_) => None,
         }
     }
 
@@ -1148,6 +1411,10 @@ impl SettingsWindow {
     fn field_uses_dropdown(field: EditableField) -> bool {
         matches!(field, EditableField::Theme | EditableField::FontFamily)
             || Self::enum_root_setting_for_field(field).is_some()
+    }
+
+    fn field_uses_click_only_dropdown(field: EditableField) -> bool {
+        Self::enum_root_setting_for_field(field).is_some()
     }
 
     fn dropdown_option_for_enum_choice(value: &str, label: &str) -> DropdownOption {
@@ -1269,6 +1536,7 @@ impl SettingsWindow {
             return;
         }
         self.active_input = None;
+        termy_toast::success("Saved");
         cx.notify();
     }
 
@@ -1282,8 +1550,13 @@ impl SettingsWindow {
             return false;
         }
 
+        let dropdown_query = if Self::field_uses_click_only_dropdown(field) {
+            ""
+        } else {
+            query
+        };
         let Some(first_option) = self
-            .dropdown_options_for_field(field, query)
+            .dropdown_options_for_field(field, dropdown_query)
             .into_iter()
             .next()
         else {
@@ -1373,13 +1646,6 @@ impl SettingsWindow {
                 termy_config_core::TabWidthMode::ActiveGrowSticky => "active_grow_sticky",
             }
             .to_string(),
-            EditableField::KeybindDirectives => self
-                .config
-                .keybind_lines
-                .iter()
-                .map(|line| line.value.as_str())
-                .collect::<Vec<_>>()
-                .join("; "),
             EditableField::WorkingDirectory => self.config.working_dir.clone().unwrap_or_default(),
             EditableField::WorkingDirFallback => match self.config.working_dir_fallback {
                 termy_config_core::WorkingDirFallback::Home => "home",
@@ -1670,39 +1936,6 @@ impl SettingsWindow {
                 };
                 config::set_root_setting(termy_config_core::RootSettingId::TabWidthMode, canonical)
             }
-            EditableField::KeybindDirectives => {
-                let lines = value
-                    .split(['\n', ';'])
-                    .map(str::trim)
-                    .filter(|line| !line.is_empty())
-                    .map(ToString::to_string)
-                    .collect::<Vec<_>>();
-                let (_directives, warnings) =
-                    termy_command_core::parse_keybind_directives_from_iter(
-                        lines.iter().enumerate().map(|(index, line)| {
-                            termy_command_core::KeybindLineRef {
-                                line_number: index + 1,
-                                value: line.as_str(),
-                            }
-                        }),
-                    );
-                if let Some(first_warning) = warnings.first() {
-                    return Err(format!(
-                        "Invalid keybind directive on line {}: {}",
-                        first_warning.line_number, first_warning.message
-                    ));
-                }
-                config::set_keybind_lines(&lines)?;
-                self.config.keybind_lines = lines
-                    .into_iter()
-                    .enumerate()
-                    .map(|(index, value)| termy_config_core::KeybindConfigLine {
-                        line_number: index + 1,
-                        value,
-                    })
-                    .collect();
-                Ok(())
-            }
             EditableField::WorkingDirectory => {
                 if value.is_empty() {
                     self.config.working_dir = None;
@@ -1770,6 +2003,7 @@ impl SettingsWindow {
         cx: &mut Context<Self>,
     ) {
         self.blur_sidebar_search();
+        self.capturing_action = None;
         self.active_input = Some(ActiveTextInput::new(
             field,
             self.editable_field_value(field),
@@ -1794,7 +2028,7 @@ impl SettingsWindow {
     }
 
     fn uses_text_input_for_field(field: EditableField) -> bool {
-        !Self::is_numeric_field(field)
+        !Self::is_numeric_field(field) && !Self::field_uses_click_only_dropdown(field)
     }
 
     fn step_numeric_field(&mut self, field: EditableField, delta: i32, cx: &mut Context<Self>) {
@@ -1852,6 +2086,8 @@ impl SettingsWindow {
 
         if let Err(error) = result {
             termy_toast::error(error);
+        } else {
+            termy_toast::success("Saved");
         }
         self.active_input = None;
         cx.notify();
@@ -1933,6 +2169,8 @@ impl SettingsWindow {
         if let Err(error) = self.apply_editable_field(input.field, input.state.text()) {
             termy_toast::error(error);
             self.active_input = Some(input);
+        } else {
+            termy_toast::success("Saved");
         }
         cx.notify();
     }
@@ -1962,24 +2200,54 @@ impl SettingsWindow {
         &self,
         title: &'static str,
         subtitle: &'static str,
+        section: SettingsSection,
+        cx: &mut Context<Self>,
     ) -> impl IntoElement {
+        let bg_input = self.bg_input();
+        let hover_bg = self.bg_hover();
+        let border_color = self.border_color();
+        let text_primary = self.text_primary();
+        let text_muted = self.text_muted();
+        let text_secondary = self.text_secondary();
+
         div()
             .flex()
-            .flex_col()
-            .gap_1()
+            .items_end()
+            .justify_between()
+            .gap_4()
             .mb_6()
             .child(
                 div()
-                    .text_xl()
-                    .font_weight(gpui::FontWeight::BOLD)
-                    .text_color(self.text_primary())
-                    .child(title),
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .child(
+                        div()
+                            .text_xl()
+                            .font_weight(gpui::FontWeight::BOLD)
+                            .text_color(text_primary)
+                            .child(title),
+                    )
+                    .child(div().text_sm().text_color(text_muted).child(subtitle)),
             )
             .child(
                 div()
+                    .id(SharedString::from(format!("reset-section-{section:?}")))
+                    .px_3()
+                    .py_2()
+                    .rounded(px(0.0))
+                    .bg(bg_input)
+                    .border_1()
+                    .border_color(border_color)
                     .text_sm()
-                    .text_color(self.text_muted())
-                    .child(subtitle),
+                    .font_weight(gpui::FontWeight::MEDIUM)
+                    .text_color(text_secondary)
+                    .cursor_pointer()
+                    .hover(move |s| s.bg(hover_bg).text_color(text_primary))
+                    .child("Reset section")
+                    .on_click(cx.listener(move |view, _, _, cx| {
+                        view.reset_section_to_defaults(section, cx);
+                    })),
             )
     }
 
@@ -1993,6 +2261,36 @@ impl SettingsWindow {
             .child(title)
     }
 
+    fn render_reset_setting_button(
+        &self,
+        setting_key: &'static str,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let bg_input = self.bg_input();
+        let hover_bg = self.bg_hover();
+        let border_color = self.border_color();
+        let text_primary = self.text_primary();
+        let text_muted = self.text_muted();
+
+        div()
+            .id(SharedString::from(format!("reset-setting-{setting_key}")))
+            .px_2()
+            .py_1()
+            .rounded(px(0.0))
+            .bg(bg_input)
+            .border_1()
+            .border_color(border_color)
+            .text_xs()
+            .font_weight(gpui::FontWeight::MEDIUM)
+            .text_color(text_muted)
+            .cursor_pointer()
+            .hover(move |s| s.bg(hover_bg).text_color(text_primary))
+            .child("Reset")
+            .on_click(cx.listener(move |view, _, _, cx| {
+                view.reset_setting_to_default(setting_key, cx);
+            }))
+    }
+
     fn render_setting_row(
         &self,
         search_key: &'static str,
@@ -2003,19 +2301,38 @@ impl SettingsWindow {
         cx: &mut Context<Self>,
         on_toggle: impl Fn(&mut Self, &mut Context<Self>) + 'static,
     ) -> AnyElement {
+        let is_search_match = self.setting_matches_sidebar_query(search_key);
+        let row_border = if is_search_match {
+            self.accent_with_alpha(0.55)
+        } else {
+            self.border_color()
+        };
+        let row_bg = if is_search_match {
+            self.accent_with_alpha(0.08)
+        } else {
+            self.bg_card()
+        };
+        let toggle_label_color = if checked {
+            self.accent()
+        } else {
+            self.text_muted()
+        };
+
         let row = div()
             .flex()
             .items_center()
             .justify_between()
+            .gap_4()
             .py_3()
             .px_4()
             .rounded(px(0.0))
-            .bg(self.bg_card())
+            .bg(row_bg)
             .border_1()
-            .border_color(self.border_color())
+            .border_color(row_border)
             .child(
                 div()
                     .flex()
+                    .flex_1()
                     .flex_col()
                     .gap(px(2.0))
                     .child(
@@ -2023,18 +2340,33 @@ impl SettingsWindow {
                             .text_sm()
                             .font_weight(gpui::FontWeight::MEDIUM)
                             .text_color(self.text_primary())
-                            .truncate()
                             .child(title),
                     )
                     .child(
                         div()
                             .text_xs()
                             .text_color(self.text_muted())
-                            .truncate()
+                            .line_height(px(17.0))
                             .child(description),
                     ),
             )
-            .child(self.render_switch(id, checked, cx, on_toggle));
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_3()
+                    .child(
+                        div()
+                            .w(px(24.0))
+                            .text_xs()
+                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .text_color(toggle_label_color)
+                            .text_align(TextAlign::Center)
+                            .child(if checked { "On" } else { "Off" }),
+                    )
+                    .child(self.render_switch(id, checked, cx, on_toggle))
+                    .child(self.render_reset_setting_button(search_key, cx)),
+            );
 
         self.wrap_setting_with_scroll_anchor(search_key, row.into_any_element())
     }
@@ -2046,28 +2378,34 @@ impl SettingsWindow {
         cx: &mut Context<Self>,
         on_toggle: impl Fn(&mut Self, &mut Context<Self>) + 'static,
     ) -> impl IntoElement {
-        let accent = self.accent();
-        // Off state: use a more visible muted foreground color
+        let accent = self.accent_with_alpha(0.95);
         let mut bg_off = self.colors.foreground;
-        bg_off.a = 0.25;
+        bg_off.a = 0.34;
         let track_color = if checked { accent } else { bg_off };
         let knob_color = self.contrasting_text_for_fill(track_color, self.bg_card());
+        let knob_left = if checked {
+            SETTINGS_SWITCH_WIDTH - SETTINGS_SWITCH_KNOB_SIZE - 2.0
+        } else {
+            2.0
+        };
 
         div()
             .id(SharedString::from(id))
-            .w(px(44.0))
-            .h(px(24.0))
+            .w(px(SETTINGS_SWITCH_WIDTH))
+            .h(px(SETTINGS_SWITCH_HEIGHT))
             .rounded(px(0.0))
             .bg(track_color)
+            .border_1()
+            .border_color(self.border_color())
             .cursor_pointer()
             .relative()
             .child(
                 div()
                     .absolute()
                     .top(px(2.0))
-                    .left(if checked { px(22.0) } else { px(2.0) })
-                    .w(px(20.0))
-                    .h(px(20.0))
+                    .left(px(knob_left))
+                    .w(px(SETTINGS_SWITCH_KNOB_SIZE))
+                    .h(px(SETTINGS_SWITCH_KNOB_SIZE))
                     .rounded(px(0.0))
                     .bg(knob_color)
                     .shadow_sm(),
@@ -2087,11 +2425,17 @@ impl SettingsWindow {
         display_value: String,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        if field == EditableField::BackgroundOpacity {
+            return self.render_background_opacity_row(search_key, title, description, cx);
+        }
+
         let is_numeric = Self::is_numeric_field(field);
+        let uses_text_input = Self::uses_text_input_for_field(field);
         let is_active = self
             .active_input
             .as_ref()
             .is_some_and(|input| input.field == field);
+        let is_search_match = self.setting_matches_sidebar_query(search_key);
         let uses_dropdown = Self::field_uses_dropdown(field);
         let accent_inner_border = is_numeric || uses_dropdown;
         let dropdown_options = if uses_dropdown && is_active {
@@ -2100,9 +2444,23 @@ impl SettingsWindow {
                 .as_ref()
                 .map(|input| input.state.text())
                 .unwrap_or("");
-            self.dropdown_options_for_field(field, query)
+            if Self::field_uses_click_only_dropdown(field) {
+                self.dropdown_options_for_field(field, "")
+            } else {
+                self.dropdown_options_for_field(field, query)
+            }
         } else {
             Vec::new()
+        };
+        let row_border = if is_search_match {
+            self.accent_with_alpha(0.55)
+        } else {
+            self.border_color()
+        };
+        let row_bg = if is_search_match {
+            self.accent_with_alpha(0.08)
+        } else {
+            self.bg_card()
         };
 
         // Cache colors for closures
@@ -2122,7 +2480,6 @@ impl SettingsWindow {
             for (index, option) in dropdown_options.into_iter().enumerate() {
                 let option_label = option.display_text();
                 let option_value = option.value.clone();
-                let should_preview_font = field == EditableField::FontFamily;
                 list = list.child(
                     div()
                         .id(SharedString::from(format!(
@@ -2133,7 +2490,6 @@ impl SettingsWindow {
                         .text_sm()
                         .text_color(text_secondary)
                         .cursor_pointer()
-                        .when(should_preview_font, |s| s.font_family(option_value.clone()))
                         .hover(|this| this.bg(hover_bg))
                         .on_mouse_down(
                             MouseButton::Left,
@@ -2146,15 +2502,16 @@ impl SettingsWindow {
                 );
             }
 
-            // Use a fully opaque background for the dropdown so it covers content below
-            let dropdown_bg = self.bg_primary();
+            // Use a fully opaque background so dropdowns never show content underneath.
+            let mut dropdown_bg = self.colors.background;
+            dropdown_bg.a = 1.0;
             dropdown = Some(
                 deferred(
                     div()
                         .id(SharedString::from(format!("dropdown-suggestions-{field:?}")))
                         .occlude()
                         .absolute()
-                        .top(px(34.0))
+                        .top(px(SETTINGS_CONTROL_HEIGHT + 2.0))
                         .left_0()
                         .right_0()
                         .max_h(if field == EditableField::Theme {
@@ -2198,7 +2555,7 @@ impl SettingsWindow {
                 .flex()
                 .items_center()
                 .justify_between()
-                .gap_1()
+                .gap_2()
                 .child(
                     div()
                         .id(SharedString::from(format!("dec-{field:?}")))
@@ -2246,7 +2603,7 @@ impl SettingsWindow {
                         })),
                 )
                 .into_any_element()
-        } else if is_active {
+        } else if is_active && uses_text_input {
             let font = Font {
                 family: self.config.font_family.clone().into(),
                 ..Font::default()
@@ -2256,29 +2613,78 @@ impl SettingsWindow {
                 cx.entity(),
                 self.focus_handle.clone(),
                 font,
-                px(13.0),
+                px(SETTINGS_INPUT_TEXT_SIZE),
                 text_secondary.into(),
                 selection_color.into(),
                 TextInputAlignment::Left,
             )
             .into_any_element()
         } else {
-            div()
-                .text_sm()
-                .text_color(text_secondary)
-                .child(readonly_display_value)
-                .into_any_element()
+            let mut readonly = div()
+                .h_full()
+                .flex()
+                .items_center()
+                .justify_between()
+                .gap_2()
+                .child(
+                    div()
+                        .flex_1()
+                        .text_size(px(SETTINGS_INPUT_TEXT_SIZE))
+                        .text_color(text_secondary)
+                        .child(readonly_display_value),
+                );
+
+            if field == EditableField::Theme {
+                readonly = readonly.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .child(
+                            div()
+                                .w(px(10.0))
+                                .h(px(10.0))
+                                .bg(self.colors.background),
+                        )
+                        .child(
+                            div()
+                                .w(px(10.0))
+                                .h(px(10.0))
+                                .bg(self.colors.foreground),
+                        )
+                        .child(div().w(px(10.0)).h(px(10.0)).bg(self.colors.cursor)),
+                );
+            } else if field == EditableField::FontFamily {
+                readonly = readonly.child(
+                    div()
+                        .text_xs()
+                        .text_color(self.text_muted())
+                        .font_family(self.config.font_family.clone())
+                        .child("Ag"),
+                );
+            }
+
+            if uses_dropdown {
+                readonly = readonly.child(
+                    div()
+                        .text_xs()
+                        .text_color(self.text_muted())
+                        .child(if is_active { "▲" } else { "▼" }),
+                );
+            }
+
+            readonly.into_any_element()
         };
 
         let row = div()
             .id(SharedString::from(format!("editable-row-{field:?}")))
             .flex()
-            .items_start()
+            .items_center()
             .gap_4()
             .py_3()
             .px_4()
             .rounded(px(0.0))
-            .bg(bg_card)
+            .bg(row_bg)
             .border_1()
             .border_color(if dropdown_open {
                 Rgba {
@@ -2288,7 +2694,7 @@ impl SettingsWindow {
                     a: 0.0,
                 }
             } else {
-                border_color
+                row_border
             })
             .cursor_pointer()
             .when(!is_numeric, |s| {
@@ -2305,13 +2711,17 @@ impl SettingsWindow {
                         }
 
                         if let Some(input) = view.active_input.as_mut() {
-                            let index = input.state.character_index_for_point(event.position);
-                            if event.modifiers.shift {
-                                input.state.select_to_utf16(index);
+                            if Self::uses_text_input_for_field(field) {
+                                let index = input.state.character_index_for_point(event.position);
+                                if event.modifiers.shift {
+                                    input.state.select_to_utf16(index);
+                                } else {
+                                    input.state.set_cursor_utf16(index);
+                                }
+                                input.selecting = true;
                             } else {
-                                input.state.set_cursor_utf16(index);
+                                input.selecting = false;
                             }
-                            input.selecting = true;
                         }
 
                         view.focus_handle.focus(window, cx);
@@ -2365,48 +2775,341 @@ impl SettingsWindow {
                             .text_sm()
                             .font_weight(gpui::FontWeight::MEDIUM)
                             .text_color(text_primary)
-                            .truncate()
                             .child(title),
                     )
                     .child(
                         div()
                             .text_xs()
                             .text_color(text_muted)
-                            .truncate()
+                            .line_height(px(17.0))
                             .child(description),
                     ),
             )
             .child(
                 div()
-                    .when(is_numeric, |s| s.w(px(NUMERIC_INPUT_WIDTH)).flex_none())
-                    .when(!is_numeric, |s| {
-                        s.flex_1().min_w(px(220.0)).max_w(px(560.0))
-                    })
-                    .relative()
-                    .h(if is_numeric {
-                        px(NUMERIC_INPUT_HEIGHT)
-                    } else {
-                        px(28.0)
-                    })
                     .flex()
-                    .flex_col()
-                    .gap_1()
+                    .items_center()
+                    .gap_2()
                     .child(
                         div()
-                            .h_full()
-                            .px_2()
+                            .w(px(SETTINGS_CONTROL_WIDTH))
+                            .relative()
+                            .h(px(SETTINGS_CONTROL_HEIGHT))
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .h_full()
+                                    .px_2()
+                                    .rounded(px(0.0))
+                                    .bg(input_bg)
+                                    .border_1()
+                                    .border_color(if is_active && accent_inner_border {
+                                        accent.into()
+                                    } else {
+                                        border_color
+                                    })
+                                    .overflow_hidden()
+                                    .child(value_element),
+                            )
+                            .when_some(dropdown, |s, dropdown| s.child(dropdown)),
+                    )
+                    .child(self.render_reset_setting_button(search_key, cx)),
+            );
+
+        self.wrap_setting_with_scroll_anchor(search_key, row.into_any_element())
+    }
+
+    fn background_opacity_slider_width() -> f32 {
+        let fixed = SETTINGS_SLIDER_VALUE_WIDTH + (NUMERIC_STEP_BUTTON_SIZE * 2.0);
+        let gaps = SETTINGS_OPACITY_CONTROL_GAP * 3.0;
+        (SETTINGS_CONTROL_WIDTH - (SETTINGS_CONTROL_INNER_PADDING * 2.0) - fixed - gaps).max(80.0)
+    }
+
+    fn quantize_background_opacity_ratio(ratio: f32) -> f32 {
+        let step = SETTINGS_OPACITY_STEP_RATIO;
+        ((ratio.clamp(0.0, 1.0) / step).round() * step).clamp(0.0, 1.0)
+    }
+
+    fn set_background_opacity_preview(&mut self, ratio: f32) -> bool {
+        let ratio = Self::quantize_background_opacity_ratio(ratio);
+        if (self.config.background_opacity - ratio).abs() < f32::EPSILON {
+            return false;
+        }
+        self.config.background_opacity = ratio;
+        true
+    }
+
+    fn commit_background_opacity(&mut self) -> Result<(), String> {
+        config::set_root_setting(
+            RootSettingId::BackgroundOpacity,
+            &format!("{:.3}", self.config.background_opacity),
+        )
+    }
+
+    fn begin_background_opacity_drag(&mut self, pointer_x: f32) {
+        self.background_opacity_drag_anchor =
+            Some((pointer_x, self.config.background_opacity.clamp(0.0, 1.0)));
+    }
+
+    fn update_background_opacity_drag(
+        &mut self,
+        pointer_x: f32,
+        slider_width: f32,
+    ) -> bool {
+        let Some((drag_start_x, drag_start_ratio)) = self.background_opacity_drag_anchor else {
+            return false;
+        };
+        let delta_ratio = (pointer_x - drag_start_x) / slider_width.max(1.0);
+        self.set_background_opacity_preview(drag_start_ratio + delta_ratio)
+    }
+
+    fn finish_background_opacity_drag(&mut self) -> Result<bool, String> {
+        let Some((_, start_ratio)) = self.background_opacity_drag_anchor.take() else {
+            return Ok(false);
+        };
+        if (self.config.background_opacity - start_ratio).abs() < f32::EPSILON {
+            return Ok(false);
+        }
+        self.commit_background_opacity()?;
+        Ok(true)
+    }
+
+    fn step_background_opacity(&mut self, delta: i32) -> Result<bool, String> {
+        let next = self.config.background_opacity + (delta as f32 * SETTINGS_OPACITY_STEP_RATIO);
+        if !self.set_background_opacity_preview(next) {
+            return Ok(false);
+        }
+        self.commit_background_opacity()?;
+        Ok(true)
+    }
+
+    fn render_background_opacity_row(
+        &mut self,
+        search_key: &'static str,
+        title: &'static str,
+        description: &'static str,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let is_search_match = self.setting_matches_sidebar_query(search_key);
+        let row_border = if is_search_match {
+            self.accent_with_alpha(0.55)
+        } else {
+            self.border_color()
+        };
+        let row_bg = if is_search_match {
+            self.accent_with_alpha(0.08)
+        } else {
+            self.bg_card()
+        };
+        let border_color = self.border_color();
+        let input_bg = self.bg_input();
+        let text_primary = self.text_primary();
+        let text_secondary = self.text_secondary();
+        let text_muted = self.text_muted();
+        let slider_track = self.bg_hover();
+        let slider_fill = self.accent_with_alpha(0.9);
+        let slider_width = Self::background_opacity_slider_width();
+        let slider_ratio = self.config.background_opacity.clamp(0.0, 1.0);
+        let slider_fill_width = slider_ratio * slider_width;
+        let slider_thumb_left = (slider_fill_width - 7.0).clamp(0.0, slider_width - 14.0);
+        let percentage = format!("{}%", (slider_ratio * 100.0).round() as i32);
+
+        let row = div()
+            .id("editable-row-background-opacity")
+            .flex()
+            .items_center()
+            .gap_4()
+            .py_3()
+            .px_4()
+            .rounded(px(0.0))
+            .bg(row_bg)
+            .border_1()
+            .border_color(row_border)
+            .child(
+                div()
+                    .flex()
+                    .flex_1()
+                    .flex_col()
+                    .gap(px(2.0))
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .text_color(text_primary)
+                            .child(title),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(text_muted)
+                            .line_height(px(17.0))
+                            .child(description),
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        div()
+                            .w(px(SETTINGS_CONTROL_WIDTH))
+                            .h(px(SETTINGS_CONTROL_HEIGHT))
+                            .px(px(SETTINGS_CONTROL_INNER_PADDING))
                             .rounded(px(0.0))
                             .bg(input_bg)
                             .border_1()
-                            .border_color(if is_active && accent_inner_border {
-                                accent.into()
-                            } else {
-                                border_color
-                            })
-                            .overflow_hidden()
-                            .child(value_element),
+                            .border_color(border_color)
+                            .child(
+                                div()
+                                    .h_full()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(SETTINGS_OPACITY_CONTROL_GAP))
+                                    .child(
+                                        div()
+                                            .id("background-opacity-slider")
+                                            .relative()
+                                            .w(px(slider_width))
+                                            .h(px(SETTINGS_SWITCH_KNOB_SIZE))
+                                            .cursor_pointer()
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(move |view, event: &MouseDownEvent, _window, cx| {
+                                                    cx.stop_propagation();
+                                                    let x: f32 = event.position.x.into();
+                                                    view.begin_background_opacity_drag(x);
+                                                    cx.notify();
+                                                }),
+                                            )
+                                            .on_mouse_move(
+                                                cx.listener(move |view, event: &MouseMoveEvent, _window, cx| {
+                                                    if !event.dragging() {
+                                                        return;
+                                                    }
+                                                    cx.stop_propagation();
+                                                    let x: f32 = event.position.x.into();
+                                                    view.update_background_opacity_drag(x, slider_width);
+                                                    cx.notify();
+                                                }),
+                                            )
+                                            .on_mouse_up(
+                                                MouseButton::Left,
+                                                cx.listener(|view, _event: &MouseUpEvent, _window, cx| {
+                                                    cx.stop_propagation();
+                                                    match view.finish_background_opacity_drag() {
+                                                        Ok(true) => termy_toast::success("Saved"),
+                                                        Ok(false) => {}
+                                                        Err(error) => termy_toast::error(error),
+                                                    }
+                                                    cx.notify();
+                                                }),
+                                            )
+                                            .on_mouse_up_out(
+                                                MouseButton::Left,
+                                                cx.listener(|view, _event: &MouseUpEvent, _window, cx| {
+                                                    cx.stop_propagation();
+                                                    match view.finish_background_opacity_drag() {
+                                                        Ok(true) => termy_toast::success("Saved"),
+                                                        Ok(false) => {}
+                                                        Err(error) => termy_toast::error(error),
+                                                    }
+                                                    cx.notify();
+                                                }),
+                                            )
+                                            .child(
+                                                div()
+                                                    .absolute()
+                                                    .top(px(7.0))
+                                                    .left_0()
+                                                    .w(px(slider_width))
+                                                    .h(px(4.0))
+                                                    .bg(slider_track),
+                                            )
+                                            .child(
+                                                div()
+                                                    .absolute()
+                                                    .top(px(7.0))
+                                                    .left_0()
+                                                    .w(px(slider_fill_width))
+                                                    .h(px(4.0))
+                                                    .bg(slider_fill),
+                                            )
+                                            .child(
+                                                div()
+                                                    .absolute()
+                                                    .top(px(2.0))
+                                                    .left(px(slider_thumb_left))
+                                                    .w(px(14.0))
+                                                    .h(px(14.0))
+                                                    .bg(self.accent()),
+                                            ),
+                                    )
+                                    .child(
+                                        div()
+                                            .id("background-opacity-dec")
+                                            .w(px(NUMERIC_STEP_BUTTON_SIZE))
+                                            .h(px(NUMERIC_STEP_BUTTON_SIZE))
+                                            .rounded(px(0.0))
+                                            .cursor_pointer()
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .bg(self.bg_input())
+                                            .border_1()
+                                            .border_color(border_color)
+                                            .text_color(text_primary)
+                                            .font_weight(gpui::FontWeight::BOLD)
+                                            .text_sm()
+                                            .child("-")
+                                            .on_click(cx.listener(|view, _, _, cx| {
+                                                match view.step_background_opacity(-1) {
+                                                    Ok(true) => termy_toast::success("Saved"),
+                                                    Ok(false) => {}
+                                                    Err(error) => termy_toast::error(error),
+                                                }
+                                                cx.notify();
+                                            })),
+                                    )
+                                    .child(
+                                        div()
+                                            .w(px(SETTINGS_SLIDER_VALUE_WIDTH))
+                                            .text_sm()
+                                            .text_color(text_secondary)
+                                            .text_align(TextAlign::Center)
+                                            .child(percentage),
+                                    )
+                                    .child(
+                                        div()
+                                            .id("background-opacity-inc")
+                                            .w(px(NUMERIC_STEP_BUTTON_SIZE))
+                                            .h(px(NUMERIC_STEP_BUTTON_SIZE))
+                                            .rounded(px(0.0))
+                                            .cursor_pointer()
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .bg(self.bg_input())
+                                            .border_1()
+                                            .border_color(border_color)
+                                            .text_color(text_primary)
+                                            .font_weight(gpui::FontWeight::BOLD)
+                                            .text_sm()
+                                            .child("+")
+                                            .on_click(cx.listener(|view, _, _, cx| {
+                                                match view.step_background_opacity(1) {
+                                                    Ok(true) => termy_toast::success("Saved"),
+                                                    Ok(false) => {}
+                                                    Err(error) => termy_toast::error(error),
+                                                }
+                                                cx.notify();
+                                            })),
+                                    ),
+                            ),
                     )
-                    .when_some(dropdown, |s, dropdown| s.child(dropdown)),
+                    .child(self.render_reset_setting_button(search_key, cx)),
             );
 
         self.wrap_setting_with_scroll_anchor(search_key, row.into_any_element())
@@ -2418,6 +3121,21 @@ impl SettingsWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.capturing_action.is_some() {
+            self.handle_keybind_capture(event, cx);
+            return;
+        }
+
+        if event.keystroke.modifiers.secondary()
+            && !event.keystroke.modifiers.alt
+            && !event.keystroke.modifiers.control
+            && !event.keystroke.modifiers.function
+            && event.keystroke.key.eq_ignore_ascii_case("q")
+        {
+            cx.quit();
+            return;
+        }
+
         if event.keystroke.modifiers.secondary()
             && !event.keystroke.modifiers.alt
             && !event.keystroke.modifiers.control
@@ -2431,6 +3149,18 @@ impl SettingsWindow {
         let cmd_only = event.keystroke.modifiers.secondary()
             && !event.keystroke.modifiers.alt
             && !event.keystroke.modifiers.function;
+
+        if self.active_input.is_none()
+            && event.keystroke.key.eq_ignore_ascii_case("tab")
+            && !event.keystroke.modifiers.alt
+            && !event.keystroke.modifiers.control
+            && !event.keystroke.modifiers.function
+            && !event.keystroke.modifiers.platform
+        {
+            self.cycle_active_section(event.keystroke.modifiers.shift, window, cx);
+            cx.notify();
+            return;
+        }
 
         if self.active_input.is_none() && !self.sidebar_search_active {
             return;
@@ -2560,7 +3290,6 @@ impl SettingsWindow {
 
     fn render_appearance_section(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let background_blur = self.config.background_blur;
-        let background_opacity = self.config.background_opacity;
         let theme = self.config.theme.clone();
         let font_family = self.config.font_family.clone();
         let font_size = self.config.font_size;
@@ -2584,7 +3313,12 @@ impl SettingsWindow {
             .flex()
             .flex_col()
             .gap_2()
-            .child(self.render_section_header("Appearance", "Customize the look and feel"))
+            .child(self.render_section_header(
+                "Appearance",
+                "Customize the look and feel",
+                SettingsSection::Appearance,
+                cx,
+            ))
             .child(self.render_group_header("THEME"))
             .child(self.render_editable_row(
                 "theme",
@@ -2603,19 +3337,23 @@ impl SettingsWindow {
                 background_blur,
                 cx,
                 |view, _cx| {
-                    view.config.background_blur = !view.config.background_blur;
-                    let _ = config::set_root_setting(
-                        termy_config_core::RootSettingId::BackgroundBlur,
-                        &view.config.background_blur.to_string(),
-                    );
+                    let next = !view.config.background_blur;
+                    match config::set_root_setting(
+                        RootSettingId::BackgroundBlur,
+                        &next.to_string(),
+                    ) {
+                        Ok(()) => {
+                            view.config.background_blur = next;
+                            termy_toast::success("Saved");
+                        }
+                        Err(error) => termy_toast::error(error),
+                    }
                 },
             ))
-            .child(self.render_editable_row(
+            .child(self.render_background_opacity_row(
                 "background_opacity",
-                EditableField::BackgroundOpacity,
                 opacity_meta.title,
                 opacity_meta.description,
-                format!("{}%", (background_opacity * 100.0) as i32),
                 cx,
             ))
             .child(self.render_group_header("FONT"))
@@ -2696,7 +3434,12 @@ impl SettingsWindow {
             .flex()
             .flex_col()
             .gap_2()
-            .child(self.render_section_header("Terminal", "Configure terminal behavior"))
+            .child(self.render_section_header(
+                "Terminal",
+                "Configure terminal behavior",
+                SettingsSection::Terminal,
+                cx,
+            ))
             .child(self.render_group_header("CURSOR"))
             .child(self.render_setting_row(
                 "cursor_blink",
@@ -2706,8 +3449,14 @@ impl SettingsWindow {
                 cursor_blink,
                 cx,
                 |view, _cx| {
-                    view.config.cursor_blink = !view.config.cursor_blink;
-                    let _ = config::set_root_setting(termy_config_core::RootSettingId::CursorBlink, &view.config.cursor_blink.to_string());
+                    let next = !view.config.cursor_blink;
+                    match config::set_root_setting(RootSettingId::CursorBlink, &next.to_string()) {
+                        Ok(()) => {
+                            view.config.cursor_blink = next;
+                            termy_toast::success("Saved");
+                        }
+                        Err(error) => termy_toast::error(error),
+                    }
                 },
             ))
             .child(self.render_editable_row(
@@ -2793,12 +3542,17 @@ impl SettingsWindow {
                 command_palette_show_keybinds,
                 cx,
                 |view, _cx| {
-                    view.config.command_palette_show_keybinds =
-                        !view.config.command_palette_show_keybinds;
-                    let _ = config::set_root_setting(
-                        termy_config_core::RootSettingId::CommandPaletteShowKeybinds,
-                        &view.config.command_palette_show_keybinds.to_string(),
-                    );
+                    let next = !view.config.command_palette_show_keybinds;
+                    match config::set_root_setting(
+                        RootSettingId::CommandPaletteShowKeybinds,
+                        &next.to_string(),
+                    ) {
+                        Ok(()) => {
+                            view.config.command_palette_show_keybinds = next;
+                            termy_toast::success("Saved");
+                        }
+                        Err(error) => termy_toast::error(error),
+                    }
                 },
             ))
     }
@@ -2838,7 +3592,12 @@ impl SettingsWindow {
             .flex()
             .flex_col()
             .gap_2()
-            .child(self.render_section_header("Tabs", "Configure tab behavior and titles"))
+            .child(self.render_section_header(
+                "Tabs",
+                "Configure tab behavior and titles",
+                SettingsSection::Tabs,
+                cx,
+            ))
             .child(self.render_group_header("TAB TITLES"))
             .child(self.render_editable_row(
                 "tab_title_mode",
@@ -2856,12 +3615,17 @@ impl SettingsWindow {
                 shell_integration,
                 cx,
                 |view, _cx| {
-                    view.config.tab_title.shell_integration =
-                        !view.config.tab_title.shell_integration;
-                    let _ = config::set_root_setting(
-                        termy_config_core::RootSettingId::TabTitleShellIntegration,
-                        &view.config.tab_title.shell_integration.to_string(),
-                    );
+                    let next = !view.config.tab_title.shell_integration;
+                    match config::set_root_setting(
+                        RootSettingId::TabTitleShellIntegration,
+                        &next.to_string(),
+                    ) {
+                        Ok(()) => {
+                            view.config.tab_title.shell_integration = next;
+                            termy_toast::success("Saved");
+                        }
+                        Err(error) => termy_toast::error(error),
+                    }
                 },
             ))
             .child(self.render_editable_row(
@@ -2930,11 +3694,17 @@ impl SettingsWindow {
                 show_termy,
                 cx,
                 |view, _cx| {
-                    view.config.show_termy_in_titlebar = !view.config.show_termy_in_titlebar;
-                    let _ = config::set_root_setting(
-                        termy_config_core::RootSettingId::ShowTermyInTitlebar,
-                        &view.config.show_termy_in_titlebar.to_string(),
-                    );
+                    let next = !view.config.show_termy_in_titlebar;
+                    match config::set_root_setting(
+                        RootSettingId::ShowTermyInTitlebar,
+                        &next.to_string(),
+                    ) {
+                        Ok(()) => {
+                            view.config.show_termy_in_titlebar = next;
+                            termy_toast::success("Saved");
+                        }
+                        Err(error) => termy_toast::error(error),
+                    }
                 },
             ))
     }
@@ -2972,7 +3742,12 @@ impl SettingsWindow {
             .flex()
             .flex_col()
             .gap_2()
-            .child(self.render_section_header("Advanced", "Advanced configuration options"))
+            .child(self.render_section_header(
+                "Advanced",
+                "Advanced configuration options",
+                SettingsSection::Advanced,
+                cx,
+            ))
             .child(self.render_group_header("STARTUP"))
             .child(self.render_editable_row(
                 "working_dir",
@@ -2999,12 +3774,17 @@ impl SettingsWindow {
                 warn_on_quit,
                 cx,
                 |view, _cx| {
-                    view.config.warn_on_quit_with_running_process =
-                        !view.config.warn_on_quit_with_running_process;
-                    let _ = config::set_root_setting(
-                        termy_config_core::RootSettingId::WarnOnQuitWithRunningProcess,
-                        &view.config.warn_on_quit_with_running_process.to_string(),
-                    );
+                    let next = !view.config.warn_on_quit_with_running_process;
+                    match config::set_root_setting(
+                        RootSettingId::WarnOnQuitWithRunningProcess,
+                        &next.to_string(),
+                    ) {
+                        Ok(()) => {
+                            view.config.warn_on_quit_with_running_process = next;
+                            termy_toast::success("Saved");
+                        }
+                        Err(error) => termy_toast::error(error),
+                    }
                 },
             ))
             .child(self.render_group_header("WINDOW"))
@@ -3045,7 +3825,6 @@ impl SettingsWindow {
                     .child(
                         div()
                             .text_xs()
-                            .font_family("monospace")
                             .text_color(text_secondary)
                             .child("~/.config/termy/config.txt"),
                     )
@@ -3215,33 +3994,75 @@ impl Render for SettingsWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_window_background_appearance(window);
         let bg = self.bg_primary();
-        let settings_scrollbar = self.settings_scrollbar_metrics(window).map(|metrics| {
+        let settings_scrollbar_metrics = self.settings_scrollbar_metrics(window);
+        let settings_scrollbar_lane = {
             div()
+                .flex_none()
                 .w(px(SETTINGS_SCROLLBAR_WIDTH + 4.0))
+                .min_w(px(SETTINGS_SCROLLBAR_WIDTH + 4.0))
+                .max_w(px(SETTINGS_SCROLLBAR_WIDTH + 4.0))
                 .h_full()
                 .pl(px(2.0))
                 .pr(px(2.0))
-                .child(ui_scrollbar::render_vertical(
-                    "settings-content-scrollbar",
-                    metrics,
-                    self.settings_scrollbar_style(),
-                    false,
-                    &[],
-                    None,
-                    0.0,
-                ))
-        });
+                .when_some(settings_scrollbar_metrics, |s, metrics| {
+                    s.child(ui_scrollbar::render_vertical(
+                        "settings-content-scrollbar",
+                        metrics,
+                        self.settings_scrollbar_style(),
+                        false,
+                        &[],
+                        None,
+                        0.0,
+                    ))
+                })
+        };
         div()
             .id("settings-root")
             .track_focus(&self.focus_handle)
             .on_key_down(cx.listener(Self::handle_key_down))
             .on_any_mouse_down(cx.listener(|view, _event: &MouseDownEvent, _window, cx| {
-                if view.active_input.is_some() || view.sidebar_search_active {
+                if view.active_input.is_some()
+                    || view.sidebar_search_active
+                    || view.capturing_action.is_some()
+                {
                     view.active_input = None;
+                    view.capturing_action = None;
                     view.blur_sidebar_search();
                     cx.notify();
                 }
             }))
+            .when(self.background_opacity_drag_anchor.is_some(), |s| {
+                s.on_mouse_move(cx.listener(|view, event: &MouseMoveEvent, _window, cx| {
+                    if !event.dragging() {
+                        return;
+                    }
+                    let x: f32 = event.position.x.into();
+                    view.update_background_opacity_drag(x, Self::background_opacity_slider_width());
+                    cx.notify();
+                }))
+                .on_mouse_up(
+                    MouseButton::Left,
+                    cx.listener(|view, _event: &MouseUpEvent, _window, cx| {
+                        match view.finish_background_opacity_drag() {
+                            Ok(true) => termy_toast::success("Saved"),
+                            Ok(false) => {}
+                            Err(error) => termy_toast::error(error),
+                        }
+                        cx.notify();
+                    }),
+                )
+                .on_mouse_up_out(
+                    MouseButton::Left,
+                    cx.listener(|view, _event: &MouseUpEvent, _window, cx| {
+                        match view.finish_background_opacity_drag() {
+                            Ok(true) => termy_toast::success("Saved"),
+                            Ok(false) => {}
+                            Err(error) => termy_toast::error(error),
+                        }
+                        cx.notify();
+                    }),
+                )
+            })
             .flex()
             .size_full()
             .bg(bg)
@@ -3264,7 +4085,7 @@ impl Render for SettingsWindow {
                             .p_6()
                             .child(self.render_content(cx)),
                     )
-                    .when_some(settings_scrollbar, |s, scrollbar| s.child(scrollbar)),
+                    .child(settings_scrollbar_lane),
             )
     }
 }

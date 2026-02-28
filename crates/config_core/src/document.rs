@@ -54,6 +54,32 @@ pub fn upsert_root_setting(contents: &str, setting: RootSettingId, value: &str) 
     join_lines(out)
 }
 
+pub fn remove_root_setting(contents: &str, setting: RootSettingId) -> String {
+    let mut out = Vec::new();
+    let mut in_root = true;
+
+    for line in contents.lines() {
+        let trimmed = line.trim();
+        let is_section_header = trimmed.starts_with('[') && trimmed.ends_with(']');
+        if is_section_header {
+            in_root = false;
+            out.push(line.to_string());
+            continue;
+        }
+
+        if in_root
+            && let Some((raw_key, _)) = line.split_once('=')
+            && root_setting_from_key(raw_key.trim()) == Some(setting)
+        {
+            continue;
+        }
+
+        out.push(line.to_string());
+    }
+
+    join_lines(out)
+}
+
 pub fn replace_keybind_lines(contents: &str, keybind_lines: &[String]) -> String {
     let mut out = Vec::new();
     let mut in_root = true;
@@ -218,13 +244,23 @@ fn join_lines(lines: Vec<String>) -> String {
 mod tests {
     use crate::schema::{ColorSettingId, RootSettingId};
 
-    use super::{ColorSettingUpdate, apply_color_updates, replace_keybind_lines, upsert_root_setting};
+    use super::{
+        ColorSettingUpdate, apply_color_updates, remove_root_setting, replace_keybind_lines,
+        upsert_root_setting,
+    };
 
     #[test]
     fn upsert_root_setting_canonicalizes_alias_and_preserves_comments() {
         let input = "# top\nscrollback = 3000\n# after\n";
         let output = upsert_root_setting(input, RootSettingId::ScrollbackHistory, "5000");
         assert_eq!(output, "# top\nscrollback_history = 5000\n# after\n");
+    }
+
+    #[test]
+    fn remove_root_setting_removes_all_matching_root_entries() {
+        let input = "theme = termy\nshell = /bin/zsh\nshell = /bin/bash\n[colors]\nforeground = #fff\n";
+        let output = remove_root_setting(input, RootSettingId::Shell);
+        assert_eq!(output, "theme = termy\n[colors]\nforeground = #fff\n");
     }
 
     #[test]

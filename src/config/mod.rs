@@ -12,7 +12,8 @@ use std::{
 pub use error::ConfigIoError;
 pub use io::{ensure_config_file, open_config_file, subscribe_config_changes};
 pub use mutate::{
-    import_colors_from_json, set_color_setting, set_keybind_lines, set_root_setting,
+    import_colors_from_json, remove_root_setting, set_color_setting, set_keybind_lines,
+    set_root_setting,
     set_theme_in_config,
 };
 pub use termy_config_core::{
