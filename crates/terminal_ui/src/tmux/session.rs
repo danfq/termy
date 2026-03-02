@@ -1,4 +1,10 @@
 use anyhow::{Context, Result, anyhow};
+#[cfg(unix)]
+use crate::locale::{Utf8LocaleOverridePlan, preferred_utf8_locale, utf8_locale_override_plan};
+#[cfg(unix)]
+use crate::path_env::normalized_path_env;
+#[cfg(unix)]
+use std::env;
 use std::process::Command;
 
 use super::command::tmux_command_line;
@@ -13,12 +19,41 @@ pub(crate) fn append_socket_args(command: &mut Command, socket_target: &TmuxSock
     }
 }
 
+pub(crate) fn normalize_tmux_command_env(command: &mut Command) {
+    #[cfg(unix)]
+    {
+        // Finder/DMG launches on macOS use a minimal process environment.
+        // Normalize PATH + locale for tmux subprocesses so startup behavior
+        // matches terminal-launched runs.
+        if let Some(path) = normalized_path_env(env::var_os("PATH").as_deref()) {
+            command.env("PATH", path);
+        }
+
+        let lc_all = env::var("LC_ALL").ok();
+        let lc_ctype = env::var("LC_CTYPE").ok();
+        let lang = env::var("LANG").ok();
+        let target_utf8_locale =
+            preferred_utf8_locale(lc_all.as_deref(), lc_ctype.as_deref(), lang.as_deref());
+        match utf8_locale_override_plan(lc_all.as_deref(), lc_ctype.as_deref(), lang.as_deref()) {
+            Utf8LocaleOverridePlan::None => {}
+            Utf8LocaleOverridePlan::LcCtypeOnly => {
+                command.env("LC_CTYPE", &target_utf8_locale);
+            }
+            Utf8LocaleOverridePlan::LcAllAndLcCtype => {
+                command.env("LC_ALL", &target_utf8_locale);
+                command.env("LC_CTYPE", &target_utf8_locale);
+            }
+        }
+    }
+}
+
 pub(crate) fn run_tmux_command_with_socket(
     binary: &str,
     socket_target: &TmuxSocketTarget,
     args: &[&str],
 ) -> Result<std::process::Output> {
     let mut command = Command::new(binary);
+    normalize_tmux_command_env(&mut command);
     append_socket_args(&mut command, socket_target);
     let output = command.args(args).output()?;
 
@@ -41,7 +76,9 @@ pub(crate) fn run_tmux_command_with_socket(
 }
 
 pub(crate) fn verify_tmux_version(binary: &str, minimum_major: u8, minimum_minor: u8) -> Result<()> {
-    let output = Command::new(binary)
+    let mut command = Command::new(binary);
+    normalize_tmux_command_env(&mut command);
+    let output = command
         .arg("-V")
         .output()
         .with_context(|| format!("failed to execute '{}' -V", binary))?;
@@ -154,6 +191,10 @@ pub(crate) fn parse_version_prefix(version: &str) -> Option<(u8, u8)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    use std::ffi::OsString;
+    #[cfg(unix)]
+    use std::path::PathBuf;
 
     #[test]
     fn rename_session_rejects_empty_session_names() {
@@ -232,5 +273,84 @@ mod tests {
             .map(|arg| arg.to_string_lossy().to_string())
             .collect::<Vec<_>>();
         assert_eq!(named_args, vec!["-L", "work"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn normalized_tmux_path_starts_from_default_system_path_when_missing() {
+        let path = normalized_path_env(None).expect("normalized path");
+        let parsed = std::env::split_paths(&OsString::from(path)).collect::<Vec<_>>();
+        assert!(parsed.contains(&PathBuf::from("/usr/bin")));
+        assert!(parsed.contains(&PathBuf::from("/bin")));
+        assert!(parsed.contains(&PathBuf::from("/usr/sbin")));
+        assert!(parsed.contains(&PathBuf::from("/sbin")));
+        assert!(parsed.contains(&PathBuf::from("/opt/homebrew/bin")));
+        assert!(parsed.contains(&PathBuf::from("/opt/homebrew/sbin")));
+        assert!(parsed.contains(&PathBuf::from("/usr/local/bin")));
+        assert!(parsed.contains(&PathBuf::from("/usr/local/sbin")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn normalized_tmux_path_treats_empty_path_as_missing() {
+        let raw = OsString::from("");
+        let path = normalized_path_env(Some(raw.as_os_str())).expect("normalized path");
+        let parsed = std::env::split_paths(&OsString::from(path)).collect::<Vec<_>>();
+        assert!(parsed.contains(&PathBuf::from("/usr/bin")));
+        assert!(parsed.contains(&PathBuf::from("/bin")));
+        assert!(parsed.contains(&PathBuf::from("/usr/sbin")));
+        assert!(parsed.contains(&PathBuf::from("/sbin")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn normalized_tmux_path_appends_missing_entries_without_duplication() {
+        let raw = OsString::from("/opt/homebrew/bin:/usr/bin:/bin");
+        let path = normalized_path_env(Some(raw.as_os_str())).expect("normalized path");
+        let parsed = std::env::split_paths(&OsString::from(path)).collect::<Vec<_>>();
+        let homebrew_bin = PathBuf::from("/opt/homebrew/bin");
+        assert_eq!(parsed.iter().filter(|entry| **entry == homebrew_bin).count(), 1);
+        assert!(parsed.contains(&PathBuf::from("/opt/homebrew/sbin")));
+        assert!(parsed.contains(&PathBuf::from("/usr/local/bin")));
+        assert!(parsed.contains(&PathBuf::from("/usr/local/sbin")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn locale_override_plan_respects_lc_all_precedence() {
+        assert_eq!(
+            utf8_locale_override_plan(Some("C"), Some("en_US.UTF-8"), Some("en_US.UTF-8")),
+            Utf8LocaleOverridePlan::LcAllAndLcCtype
+        );
+        assert_eq!(
+            utf8_locale_override_plan(Some("en_US.UTF-8"), Some("C"), Some("C")),
+            Utf8LocaleOverridePlan::None
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn locale_override_plan_uses_lc_ctype_or_lang_when_lc_all_missing() {
+        assert_eq!(
+            utf8_locale_override_plan(None, Some("C"), Some("en_US.UTF-8")),
+            Utf8LocaleOverridePlan::LcCtypeOnly
+        );
+        assert_eq!(
+            utf8_locale_override_plan(None, Some("en_US.UTF-8"), None),
+            Utf8LocaleOverridePlan::None
+        );
+        assert_eq!(
+            utf8_locale_override_plan(None, None, Some("en_US.UTF-8")),
+            Utf8LocaleOverridePlan::None
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn preferred_utf8_locale_preserves_modifier_and_converts_encoding() {
+        assert_eq!(
+            preferred_utf8_locale(None, Some("en_US.ISO8859-1@euro"), None),
+            "en_US.UTF-8@euro"
+        );
     }
 }
