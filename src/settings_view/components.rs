@@ -5,7 +5,7 @@ impl SettingsWindow {
         if text.is_empty() || text.eq_ignore_ascii_case("not configured") {
             "Not configured".to_string()
         } else {
-            "•".repeat(text.chars().count())
+            "••••••••".to_string()
         }
     }
 

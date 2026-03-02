@@ -253,7 +253,13 @@ impl OpenAiClient {
             .into_iter()
             .filter(|model| {
                 model.id.starts_with("gpt-")
-                    || model.id.starts_with("o")
+                    || (model.id.starts_with('o')
+                        && model
+                            .id
+                            .chars()
+                            .nth(1)
+                            .map(|ch| ch.is_ascii_digit())
+                            .unwrap_or(false))
                     || model.id.starts_with("chatgpt-")
             })
             .collect())

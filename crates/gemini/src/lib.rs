@@ -162,11 +162,15 @@ impl GeminiClient {
             temperature: None,
         };
 
-        let response =
-            ureq::post("https://generativelanguage.googleapis.com/v1beta/openai/chat/completions")
-                .set("Authorization", &format!("Bearer {}", self.api_key))
-                .set("Content-Type", "application/json")
-                .send_json(&request)?;
+        let agent = ureq::AgentBuilder::new()
+            .timeout_read(std::time::Duration::from_secs(10))
+            .timeout_write(std::time::Duration::from_secs(10))
+            .build();
+        let response = agent
+            .post("https://generativelanguage.googleapis.com/v1beta/openai/chat/completions")
+            .set("Authorization", &format!("Bearer {}", self.api_key))
+            .set("Content-Type", "application/json")
+            .send_json(&request)?;
         let chat_response: ChatResponse = response.into_json()?;
 
         if let Some(error) = chat_response.error {
