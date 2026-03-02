@@ -137,6 +137,12 @@ struct CellPos {
     row: usize,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SelectionPos {
+    col: usize,
+    line: i32,
+}
+
 #[derive(Clone, Copy, Debug)]
 pub(super) struct TerminalViewportGeometry {
     origin_x: f32,
@@ -783,8 +789,8 @@ pub struct TerminalView {
     pane_focus_transition: Option<PaneFocusTransition>,
     pane_focus_animation_scheduled: bool,
     line_height: f32,
-    selection_anchor: Option<CellPos>,
-    selection_head: Option<CellPos>,
+    selection_anchor: Option<SelectionPos>,
+    selection_head: Option<SelectionPos>,
     selection_dragging: bool,
     selection_moved: bool,
     hovered_link: Option<HoveredLink>,

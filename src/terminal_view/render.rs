@@ -557,6 +557,27 @@ impl Render for TerminalView {
             .detach();
         }
 
+        let this = cx.entity().downgrade();
+        window.on_mouse_event({
+            let this = this.clone();
+            move |event: &MouseMoveEvent, phase, _window, cx| {
+                if phase != gpui::DispatchPhase::Bubble {
+                    return;
+                }
+                let _ = this.update(cx, |view, cx| {
+                    view.handle_global_mouse_move_event(event, cx);
+                });
+            }
+        });
+        window.on_mouse_event(move |event: &MouseUpEvent, phase, _window, cx| {
+            if phase != gpui::DispatchPhase::Bubble {
+                return;
+            }
+            let _ = this.update(cx, |view, cx| {
+                view.handle_global_mouse_up_event(event, cx);
+            });
+        });
+
         // Compute update banner state
         #[cfg(target_os = "macos")]
         let banner_state = self.auto_updater.as_ref().map(|e| e.read(cx).state.clone());
@@ -741,7 +762,7 @@ impl Render for TerminalView {
 
                         let c = cell_content.c;
                         let is_cursor = show_cursor && col == cursor_col && row == cursor_row;
-                        let selected = is_active_pane && self.cell_is_selected(col, row);
+                        let selected = is_active_pane && self.cell_is_selected(col, term_line);
 
                         let (search_current, search_match) =
                             if let Some(results) = &pane_search_results {
