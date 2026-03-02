@@ -1,4 +1,5 @@
 use super::*;
+use alacritty_terminal::grid::Dimensions;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TerminalSelectionCharClass {
@@ -11,30 +12,121 @@ fn is_hidden_or_spacer(flags: Flags) -> bool {
     flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER | Flags::HIDDEN)
 }
 
-fn fill_grid_rows_for_selection(
-    terminal: &Terminal,
-    min_row: usize,
-    max_row: usize,
+fn terminal_line_bounds(
+    grid: &alacritty_terminal::grid::Grid<alacritty_terminal::term::cell::Cell>,
+) -> Option<(i32, i32)> {
+    let screen_lines = i32::try_from(grid.screen_lines()).ok()?;
+    let total_lines = i32::try_from(grid.total_lines()).ok()?;
+    if screen_lines <= 0 || total_lines <= 0 {
+        return None;
+    }
+
+    let min_line = -(total_lines - screen_lines);
+    let max_line = screen_lines - 1;
+    Some((min_line, max_line))
+}
+
+fn grid_line_text(
+    grid: &alacritty_terminal::grid::Grid<alacritty_terminal::term::cell::Cell>,
+    line_idx: i32,
     cols: usize,
-    grid: &mut [Vec<char>],
-) {
-    let _ = terminal.for_each_renderable_cell(|display_offset, term_line, col, cell| {
-        let Some(row) = TerminalView::viewport_row_from_term_line(term_line, display_offset) else {
-            return;
-        };
-        if row < min_row || row > max_row || col >= cols {
-            return;
-        }
+) -> Option<Vec<char>> {
+    use alacritty_terminal::index::{Column, Line};
+
+    let (min_line, max_line) = terminal_line_bounds(grid)?;
+    if line_idx < min_line || line_idx > max_line {
+        return None;
+    }
+
+    let max_cols = cols.min(grid.columns());
+    let mut line = vec![' '; cols];
+    let line_ref = &grid[Line(line_idx)];
+    for col in 0..max_cols {
+        let cell = &line_ref[Column(col)];
         if is_hidden_or_spacer(cell.flags) {
-            return;
+            continue;
         }
 
         let c = cell.c;
         if c != '\0' {
-            let grid_row = row - min_row;
-            grid[grid_row][col] = if c.is_control() { ' ' } else { c };
+            line[col] = if c.is_control() { ' ' } else { c };
+        }
+    }
+    Some(line)
+}
+
+fn selected_text_from_terminal(
+    terminal: &Terminal,
+    start: SelectionPos,
+    end: SelectionPos,
+) -> Option<String> {
+    let size = terminal.size();
+    let cols = usize::from(size.cols);
+    if cols == 0 {
+        return None;
+    }
+
+    let clamped_start = SelectionPos {
+        col: start.col.min(cols.saturating_sub(1)),
+        line: start.line,
+    };
+    let clamped_end = SelectionPos {
+        col: end.col.min(cols.saturating_sub(1)),
+        line: end.line,
+    };
+    let (selection_start, selection_end) = if (clamped_end.line, clamped_end.col)
+        < (clamped_start.line, clamped_start.col)
+    {
+        (clamped_end, clamped_start)
+    } else {
+        (clamped_start, clamped_end)
+    };
+
+    let mut lines = Vec::new();
+    let _ = terminal.with_grid(|grid| {
+        let Some((min_line, max_line)) = terminal_line_bounds(grid) else {
+            return;
+        };
+
+        let start_line = selection_start.line.max(min_line);
+        let end_line = selection_end.line.min(max_line);
+        if start_line > end_line {
+            return;
+        }
+
+        for line_idx in start_line..=end_line {
+            let Some(line) = grid_line_text(grid, line_idx, cols) else {
+                continue;
+            };
+
+            let col_start = if line_idx == selection_start.line {
+                selection_start.col
+            } else {
+                0
+            };
+            let col_end = if line_idx == selection_end.line {
+                selection_end.col
+            } else {
+                cols.saturating_sub(1)
+            };
+            if col_start > col_end {
+                continue;
+            }
+
+            let rendered = line[col_start..=col_end]
+                .iter()
+                .collect::<String>()
+                .trim_end()
+                .to_string();
+            lines.push(rendered);
         }
     });
+
+    if lines.is_empty() {
+        None
+    } else {
+        Some(lines.join("\n"))
+    }
 }
 
 fn row_text_from_terminal(terminal: &Terminal, row: usize, cols: usize) -> Vec<char> {
@@ -180,33 +272,50 @@ impl TerminalView {
         matches!((self.selection_anchor, self.selection_head), (Some(anchor), Some(head)) if self.selection_moved || anchor != head)
     }
 
-    pub(in super::super) fn selection_range(&self) -> Option<(CellPos, CellPos)> {
+    pub(in super::super) fn selection_range(&self) -> Option<(SelectionPos, SelectionPos)> {
         if !self.has_selection() {
             return None;
         }
 
         let (anchor, head) = (self.selection_anchor?, self.selection_head?);
-        if (head.row, head.col) < (anchor.row, anchor.col) {
+        if (head.line, head.col) < (anchor.line, anchor.col) {
             Some((head, anchor))
         } else {
             Some((anchor, head))
         }
     }
 
-    pub(in super::super) fn cell_is_selected(&self, col: usize, row: usize) -> bool {
+    pub(in super::super) fn cell_is_selected(&self, col: usize, line: i32) -> bool {
         let Some((start, end)) = self.selection_range() else {
             return false;
         };
 
-        let here = (row, col);
-        here >= (start.row, start.col) && here <= (end.row, end.col)
+        let here = (line, col);
+        here >= (start.line, start.col) && here <= (end.line, end.col)
     }
 
     pub(in super::super) fn viewport_row_from_term_line(
         term_line: i32,
         display_offset: usize,
     ) -> Option<usize> {
-        usize::try_from(term_line + display_offset as i32).ok()
+        let term_line = i64::from(term_line);
+        let display_offset = i64::try_from(display_offset).ok()?;
+        usize::try_from(term_line + display_offset).ok()
+    }
+
+    fn term_line_from_viewport_row(row: usize, display_offset: usize) -> Option<i32> {
+        let row = i64::try_from(row).ok()?;
+        let display_offset = i64::try_from(display_offset).ok()?;
+        i32::try_from(row - display_offset).ok()
+    }
+
+    pub(in super::super) fn selection_pos_for_cell(&self, cell: CellPos) -> Option<SelectionPos> {
+        let terminal = self.active_terminal()?;
+        let (display_offset, _) = terminal.scroll_state();
+        Some(SelectionPos {
+            col: cell.col,
+            line: Self::term_line_from_viewport_row(cell.row, display_offset)?,
+        })
     }
 
     pub(in super::super) fn position_to_cell(
@@ -218,67 +327,19 @@ impl TerminalView {
         self.is_active_pane_id(&pane_id).then_some(cell)
     }
 
+    pub(in super::super) fn position_to_selection_pos(
+        &self,
+        position: gpui::Point<Pixels>,
+        clamp: bool,
+    ) -> Option<SelectionPos> {
+        let cell = self.position_to_cell(position, clamp)?;
+        self.selection_pos_for_cell(cell)
+    }
+
     pub(in super::super) fn selected_text(&self) -> Option<String> {
         let (start, end) = self.selection_range()?;
         let terminal = self.active_terminal()?;
-        let size = terminal.size();
-        let cols = size.cols as usize;
-        let rows = size.rows as usize;
-        if cols == 0 || rows == 0 {
-            return None;
-        }
-
-        let clamped_start = CellPos {
-            col: start.col.min(cols.saturating_sub(1)),
-            row: start.row.min(rows.saturating_sub(1)),
-        };
-        let clamped_end = CellPos {
-            col: end.col.min(cols.saturating_sub(1)),
-            row: end.row.min(rows.saturating_sub(1)),
-        };
-        let (selection_start, selection_end) = if (clamped_end.row, clamped_end.col)
-            < (clamped_start.row, clamped_start.col)
-        {
-            (clamped_end, clamped_start)
-        } else {
-            (clamped_start, clamped_end)
-        };
-
-        let min_row = selection_start.row;
-        let max_row = selection_end.row;
-        let grid_rows = max_row - min_row + 1;
-        let mut grid = vec![vec![' '; cols]; grid_rows];
-        fill_grid_rows_for_selection(terminal, min_row, max_row, cols, &mut grid);
-
-        let mut lines = Vec::new();
-        for row in min_row..=max_row {
-            let col_start = if row == selection_start.row {
-                selection_start.col
-            } else {
-                0
-            };
-            let col_end = if row == selection_end.row {
-                selection_end.col
-            } else {
-                cols.saturating_sub(1)
-            };
-            if col_start > col_end {
-                continue;
-            }
-
-            let grid_row = row - min_row;
-            let mut line: String = grid[grid_row][col_start..=col_end].iter().collect();
-            while line.ends_with(' ') {
-                line.pop();
-            }
-            lines.push(line);
-        }
-
-        if lines.is_empty() {
-            None
-        } else {
-            Some(lines.join("\n"))
-        }
+        selected_text_from_terminal(terminal, start, end)
     }
 
     pub(in super::super) fn row_text(&self, row: usize) -> Option<Vec<char>> {
@@ -309,6 +370,9 @@ impl TerminalView {
         let Some(line) = self.row_text(cell.row) else {
             return false;
         };
+        let Some(term_pos) = self.selection_pos_for_cell(cell) else {
+            return false;
+        };
         if cell.col >= line.len() {
             return false;
         }
@@ -335,13 +399,13 @@ impl TerminalView {
             end_col += 1;
         }
 
-        self.selection_anchor = Some(CellPos {
+        self.selection_anchor = Some(SelectionPos {
             col: start_col,
-            row: cell.row,
+            line: term_pos.line,
         });
-        self.selection_head = Some(CellPos {
+        self.selection_head = Some(SelectionPos {
             col: end_col,
-            row: cell.row,
+            line: term_pos.line,
         });
         self.selection_dragging = false;
         self.selection_moved = true;
@@ -352,17 +416,21 @@ impl TerminalView {
         let Some(terminal) = self.active_terminal() else {
             return false;
         };
+        let (display_offset, _) = terminal.scroll_state();
         let size = terminal.size();
         let cols = size.cols as usize;
         let rows = size.rows as usize;
         if cols == 0 || row >= rows {
             return false;
         }
+        let Some(line) = Self::term_line_from_viewport_row(row, display_offset) else {
+            return false;
+        };
 
-        self.selection_anchor = Some(CellPos { col: 0, row });
-        self.selection_head = Some(CellPos {
+        self.selection_anchor = Some(SelectionPos { col: 0, line });
+        self.selection_head = Some(SelectionPos {
             col: cols.saturating_sub(1),
-            row,
+            line,
         });
         self.selection_dragging = false;
         self.selection_moved = true;
@@ -433,6 +501,76 @@ mod tests {
     fn viewport_row_maps_scrollback_lines_into_viewport() {
         assert_eq!(TerminalView::viewport_row_from_term_line(-3, 3), Some(0));
         assert_eq!(TerminalView::viewport_row_from_term_line(4, 3), Some(7));
+    }
+
+    #[test]
+    fn term_line_round_trips_viewport_row_with_display_offset() {
+        let line = TerminalView::term_line_from_viewport_row(0, 4);
+        assert_eq!(line, Some(-4));
+        assert_eq!(TerminalView::viewport_row_from_term_line(line.unwrap(), 4), Some(0));
+    }
+
+    fn non_empty_grid_lines(terminal: &Terminal) -> Vec<(i32, String)> {
+        let mut lines = Vec::new();
+        let cols = usize::from(terminal.size().cols);
+        let _ = terminal.with_grid(|grid| {
+            let Some((min_line, max_line)) = terminal_line_bounds(grid) else {
+                return;
+            };
+            for line_idx in min_line..=max_line {
+                let Some(chars) = grid_line_text(grid, line_idx, cols) else {
+                    continue;
+                };
+                let rendered = chars.iter().collect::<String>().trim_end().to_string();
+                if !rendered.is_empty() {
+                    lines.push((line_idx, rendered));
+                }
+            }
+        });
+        lines
+    }
+
+    #[test]
+    fn selected_text_from_terminal_stays_stable_after_scrolling_display() {
+        let size = TerminalSize {
+            cols: 24,
+            rows: 3,
+            ..TerminalSize::default()
+        };
+        let terminal = Terminal::new_tmux(size, 256);
+        terminal.feed_output(b"line-0\r\nline-1\r\nline-2\r\nline-3\r\nline-4\r\n");
+
+        let lines = non_empty_grid_lines(&terminal);
+        let line_1 = lines
+            .iter()
+            .find(|(_, text)| text.contains("line-1"))
+            .map(|(line, _)| *line)
+            .expect("line-1 should exist in terminal grid");
+        let line_3 = lines
+            .iter()
+            .find(|(_, text)| text.contains("line-3"))
+            .map(|(line, _)| *line)
+            .expect("line-3 should exist in terminal grid");
+
+        let start = SelectionPos {
+            col: 0,
+            line: line_1,
+        };
+        let end = SelectionPos {
+            col: usize::from(size.cols).saturating_sub(1),
+            line: line_3,
+        };
+
+        let before_scroll =
+            selected_text_from_terminal(&terminal, start, end).expect("selection should resolve");
+        assert!(before_scroll.contains("line-1"));
+        assert!(before_scroll.contains("line-3"));
+
+        assert!(terminal.scroll_display(1), "expected display offset to change");
+        let after_scroll =
+            selected_text_from_terminal(&terminal, start, end).expect("selection should resolve");
+
+        assert_eq!(before_scroll, after_scroll);
     }
 
     #[test]
