@@ -2,6 +2,7 @@ use gpui::{
     App, Bounds, Element, Font, FontFeatures, FontWeight, Hsla, IntoElement, Pixels, SharedString,
     Size, TextAlign, TextRun, UnderlineStyle, Window, point, px, quad,
 };
+use std::sync::Arc;
 
 /// Info needed to render a single cell.
 #[derive(Clone)]
@@ -13,7 +14,6 @@ pub struct CellRenderInfo {
     pub bg: Hsla,
     pub bold: bool,
     pub render_text: bool,
-    pub is_cursor: bool,
     pub selected: bool,
     /// Part of the current (focused) search match
     pub search_current: bool,
@@ -28,8 +28,11 @@ pub enum TerminalCursorStyle {
 }
 
 /// Custom element for rendering the terminal grid.
+pub type TerminalGridRow = Arc<Vec<CellRenderInfo>>;
+pub type TerminalGridRows = Arc<Vec<TerminalGridRow>>;
+
 pub struct TerminalGrid {
-    pub cells: Vec<CellRenderInfo>,
+    pub cells: TerminalGridRows,
     pub cell_size: Size<Pixels>,
     pub cols: usize,
     pub rows: usize,
@@ -42,6 +45,7 @@ pub struct TerminalGrid {
     pub search_match_bg: Hsla,
     pub search_current_bg: Hsla,
     pub hovered_link_range: Option<(usize, usize, usize)>,
+    pub cursor_cell: Option<(usize, usize)>,
     pub font_family: SharedString,
     pub font_size: Pixels,
     pub cursor_style: TerminalCursorStyle,
@@ -410,79 +414,89 @@ impl Element for TerminalGrid {
             gpui::BorderStyle::default(),
         ));
 
-        // Paint background colors and cursor first.
-        for cell in &self.cells {
-            let x = origin.x + self.cell_size.width * cell.col as f32;
-            let y = origin.y + self.cell_size.height * cell.row as f32;
+        // Paint background colors first.
+        for row_cells in self.cells.iter() {
+            for cell in row_cells.iter() {
+                let x = origin.x + self.cell_size.width * cell.col as f32;
+                let y = origin.y + self.cell_size.height * cell.row as f32;
 
+                let cell_bounds = Bounds {
+                    origin: point(x, y),
+                    size: self.cell_size,
+                };
+
+                if cell.selected {
+                    window.paint_quad(quad(
+                        cell_bounds,
+                        px(0.0),
+                        self.selection_bg,
+                        gpui::Edges::default(),
+                        Hsla::transparent_black(),
+                        gpui::BorderStyle::default(),
+                    ));
+                } else if cell.search_current {
+                    window.paint_quad(quad(
+                        cell_bounds,
+                        px(0.0),
+                        self.search_current_bg,
+                        gpui::Edges::default(),
+                        Hsla::transparent_black(),
+                        gpui::BorderStyle::default(),
+                    ));
+                } else if cell.search_match {
+                    window.paint_quad(quad(
+                        cell_bounds,
+                        px(0.0),
+                        self.search_match_bg,
+                        gpui::Edges::default(),
+                        Hsla::transparent_black(),
+                        gpui::BorderStyle::default(),
+                    ));
+                } else if cell.bg.a > 0.01
+                    && !colors_approximately_equal(&cell.bg, &self.default_bg)
+                {
+                    window.paint_quad(quad(
+                        cell_bounds,
+                        px(0.0),
+                        cell.bg,
+                        gpui::Edges::default(),
+                        Hsla::transparent_black(),
+                        gpui::BorderStyle::default(),
+                    ));
+                }
+            }
+        }
+
+        if let Some((cursor_col, cursor_row)) = self.cursor_cell {
+            let x = origin.x + self.cell_size.width * cursor_col as f32;
+            let y = origin.y + self.cell_size.height * cursor_row as f32;
             let cell_bounds = Bounds {
                 origin: point(x, y),
                 size: self.cell_size,
             };
+            let cursor_bounds = match self.cursor_style {
+                TerminalCursorStyle::Block => cell_bounds,
+                TerminalCursorStyle::Line => {
+                    let cell_width: f32 = self.cell_size.width.into();
+                    let cursor_width = px(cell_width.clamp(1.0, 2.0));
+                    Bounds::new(
+                        cell_bounds.origin,
+                        Size {
+                            width: cursor_width,
+                            height: cell_bounds.size.height,
+                        },
+                    )
+                }
+            };
 
-            if cell.selected {
-                window.paint_quad(quad(
-                    cell_bounds,
-                    px(0.0),
-                    self.selection_bg,
-                    gpui::Edges::default(),
-                    Hsla::transparent_black(),
-                    gpui::BorderStyle::default(),
-                ));
-            } else if cell.search_current {
-                window.paint_quad(quad(
-                    cell_bounds,
-                    px(0.0),
-                    self.search_current_bg,
-                    gpui::Edges::default(),
-                    Hsla::transparent_black(),
-                    gpui::BorderStyle::default(),
-                ));
-            } else if cell.search_match {
-                window.paint_quad(quad(
-                    cell_bounds,
-                    px(0.0),
-                    self.search_match_bg,
-                    gpui::Edges::default(),
-                    Hsla::transparent_black(),
-                    gpui::BorderStyle::default(),
-                ));
-            } else if cell.bg.a > 0.01 && !colors_approximately_equal(&cell.bg, &self.default_bg) {
-                window.paint_quad(quad(
-                    cell_bounds,
-                    px(0.0),
-                    cell.bg,
-                    gpui::Edges::default(),
-                    Hsla::transparent_black(),
-                    gpui::BorderStyle::default(),
-                ));
-            }
-
-            if cell.is_cursor {
-                let cursor_bounds = match self.cursor_style {
-                    TerminalCursorStyle::Block => cell_bounds,
-                    TerminalCursorStyle::Line => {
-                        let cell_width: f32 = self.cell_size.width.into();
-                        let cursor_width = px(cell_width.clamp(1.0, 2.0));
-                        Bounds::new(
-                            cell_bounds.origin,
-                            Size {
-                                width: cursor_width,
-                                height: cell_bounds.size.height,
-                            },
-                        )
-                    }
-                };
-
-                window.paint_quad(quad(
-                    cursor_bounds,
-                    px(0.0),
-                    self.cursor_color,
-                    gpui::Edges::default(),
-                    Hsla::transparent_black(),
-                    gpui::BorderStyle::default(),
-                ));
-            }
+            window.paint_quad(quad(
+                cursor_bounds,
+                px(0.0),
+                self.cursor_color,
+                gpui::Edges::default(),
+                Hsla::transparent_black(),
+                gpui::BorderStyle::default(),
+            ));
         }
 
         // Pre-create font structs to avoid cloning font_family for every batch.
@@ -561,12 +575,22 @@ impl Element for TerminalGrid {
 }
 
 impl TerminalGrid {
+    fn cell_count(&self) -> usize {
+        self.cells.iter().map(|row| row.len()).sum()
+    }
+
+    fn iter_cells(&self) -> impl Iterator<Item = &CellRenderInfo> {
+        self.cells.iter().flat_map(|row| row.iter())
+    }
+
     fn cell_is_drawable_text(cell: &CellRenderInfo) -> bool {
         cell.render_text && cell.char != ' ' && cell.char != '\0' && !cell.char.is_control()
     }
 
     fn cell_fg_color(&self, cell: &CellRenderInfo, cursor_fg: Hsla, highlight_fg: Hsla) -> Hsla {
-        if cell.is_cursor && self.cursor_style == TerminalCursorStyle::Block {
+        if self.cursor_cell == Some((cell.col, cell.row))
+            && self.cursor_style == TerminalCursorStyle::Block
+        {
             cursor_fg
         } else if cell.selected {
             self.selection_fg
@@ -599,10 +623,10 @@ impl TerminalGrid {
 
     fn collect_draw_ops(&self, cursor_fg: Hsla, highlight_fg: Hsla) -> Vec<TextDrawOp> {
         let mut ops = Vec::new();
-        ops.reserve(self.cells.len());
+        ops.reserve(self.cell_count());
         let mut current: Option<TextBatch> = None;
 
-        for cell in &self.cells {
+        for cell in self.iter_cells() {
             if !Self::cell_is_drawable_text(cell) {
                 Self::push_pending_text_batch(&mut current, &mut ops);
                 continue;
@@ -665,7 +689,6 @@ mod tests {
             bg: test_color(0.0, 0.0, 0.0),
             bold: false,
             render_text: true,
-            is_cursor: false,
             selected: false,
             search_current: false,
             search_match: false,
@@ -674,7 +697,7 @@ mod tests {
 
     fn test_grid(cells: Vec<CellRenderInfo>, hovered: Option<(usize, usize, usize)>) -> TerminalGrid {
         TerminalGrid {
-            cells,
+            cells: Arc::new(vec![Arc::new(cells)]),
             cell_size: Size {
                 width: px(10.0),
                 height: px(20.0),
@@ -689,6 +712,7 @@ mod tests {
             search_match_bg: test_color(0.4, 0.4, 0.4),
             search_current_bg: test_color(0.5, 0.5, 0.5),
             hovered_link_range: hovered,
+            cursor_cell: None,
             font_family: SharedString::from("JetBrains Mono"),
             font_size: px(14.0),
             cursor_style: TerminalCursorStyle::Block,
@@ -967,10 +991,10 @@ mod tests {
         assert_eq!(block_fg, grid.selection_fg);
 
         let mut cursor_block = test_cell(0, 0, '\u{2588}');
-        cursor_block.is_cursor = true;
         cursor_block.selected = true;
         cursor_block.search_current = true;
-        let grid = test_grid(vec![cursor_block], None);
+        let mut grid = test_grid(vec![cursor_block], None);
+        grid.cursor_cell = Some((0, 0));
         let ops = collect_draw_ops(&grid);
         let block_fg = match &ops[0] {
             TextDrawOp::Block(block) => block.fg,

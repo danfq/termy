@@ -7,7 +7,7 @@ use alacritty_terminal::{
 };
 use std::sync::Arc;
 
-use crate::runtime::TerminalSize;
+use crate::runtime::{TerminalDamageSnapshot, TerminalSize, take_term_damage_snapshot};
 
 struct PaneTerminalInner {
     term: Arc<FairMutex<Term<VoidListener>>>,
@@ -85,6 +85,25 @@ impl PaneTerminal {
         // back into PaneTerminal APIs (for example size()) without lock inversion.
         let term = term.lock();
         f(&term)
+    }
+
+    fn with_term_mut<R>(
+        &self,
+        f: impl FnOnce(&mut Term<VoidListener>, &mut PaneTerminalInner) -> R,
+    ) -> R {
+        let term = self.cloned_term_arc();
+        let mut term = term.lock();
+        let mut inner = self.inner.lock();
+        let result = f(&mut term, &mut inner);
+        // Keep cached dimensions aligned with any in-place terminal mutation so
+        // PaneTerminalInner and Term cannot drift.
+        inner.size.cols = u16::try_from(term.grid().columns()).unwrap_or(u16::MAX);
+        inner.size.rows = u16::try_from(term.grid().screen_lines()).unwrap_or(u16::MAX);
+        result
+    }
+
+    pub fn take_damage_snapshot(&self) -> TerminalDamageSnapshot {
+        self.with_term_mut(|term, _inner| take_term_damage_snapshot(term))
     }
 
     pub fn scroll_display(&self, delta_lines: i32) -> bool {
@@ -267,5 +286,29 @@ mod tests {
         assert_eq!(terminal.size().rows, 1);
         assert_eq!(terminal.last_column().0, 0);
         assert_eq!(terminal.bottommost_line().0, 0);
+    }
+
+    #[test]
+    fn with_term_mut_resyncs_cached_size_after_direct_term_resize() {
+        let terminal = PaneTerminal::new(
+            TerminalSize {
+                cols: 4,
+                rows: 3,
+                ..TerminalSize::default()
+            },
+            2000,
+        );
+
+        terminal.with_term_mut(|term, _inner| {
+            term.resize(TerminalSize {
+                cols: 9,
+                rows: 7,
+                ..TerminalSize::default()
+            });
+        });
+
+        let size = terminal.size();
+        assert_eq!(size.cols, 9);
+        assert_eq!(size.rows, 7);
     }
 }
