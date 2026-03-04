@@ -1,7 +1,7 @@
 import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
-import { Hono } from "hono";
 import { Notra } from "@usenotra/sdk";
+import { Hono, type Context } from "hono";
 
 const app = new Hono();
 
@@ -13,14 +13,35 @@ const notra = NOTRA_API_KEY
   ? new Notra({ bearerAuth: NOTRA_API_KEY })
   : null;
 
+interface NotraConfig {
+  client: Notra;
+  organizationId: string;
+}
+
+function respondNotConfigured(context: Context): Response {
+  return context.json({ error: "Notra not configured" }, 500);
+}
+
+function getNotraConfig(context: Context): NotraConfig | Response {
+  if (!notra || !NOTRA_ORG_ID) {
+    return respondNotConfigured(context);
+  }
+
+  return {
+    client: notra,
+    organizationId: NOTRA_ORG_ID,
+  };
+}
+
 app.get("/api/changelogs", async (c) => {
-  if (!NOTRA_ORG_ID || !notra) {
-    return c.json({ error: "Notra not configured" }, 500);
+  const config = getNotraConfig(c);
+  if (config instanceof Response) {
+    return config;
   }
 
   try {
-    const result = await notra.content.listPosts({
-      organizationId: NOTRA_ORG_ID,
+    const result = await config.client.content.listPosts({
+      organizationId: config.organizationId,
       status: "published",
       contentType: "changelog",
       sort: "desc",
@@ -35,13 +56,14 @@ app.get("/api/changelogs", async (c) => {
 });
 
 app.get("/api/changelogs/:id", async (c) => {
-  if (!NOTRA_ORG_ID || !notra) {
-    return c.json({ error: "Notra not configured" }, 500);
+  const config = getNotraConfig(c);
+  if (config instanceof Response) {
+    return config;
   }
 
   try {
-    const result = await notra.content.getPost({
-      organizationId: NOTRA_ORG_ID,
+    const result = await config.client.content.getPost({
+      organizationId: config.organizationId,
       postId: c.req.param("id"),
     });
 

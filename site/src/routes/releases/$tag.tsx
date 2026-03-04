@@ -1,16 +1,43 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { useNotraChangelogById } from "@/hooks/useNotraReleases";
+import { ChevronLeft } from "lucide-react";
+import type { JSX } from "react";
+import Markdown from "react-markdown";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
+import { useNotraChangelogById } from "@/hooks/useNotraReleases";
 import { formatDate, proseClasses } from "@/lib/utils";
-import { ChevronLeft } from "lucide-react";
-import Markdown from "react-markdown";
 
 export const Route = createFileRoute("/releases/$tag")({
   component: ReleaseDetailPage,
 });
 
-function ReleaseDetailPage() {
+interface EmptyStateProps {
+  message: string;
+  tone: "destructive" | "neutral";
+}
+
+function EmptyState({ message, tone }: EmptyStateProps): JSX.Element {
+  const containerClassName =
+    tone === "destructive"
+      ? "p-6 rounded-xl border border-destructive/50 bg-destructive/10 text-center"
+      : "p-6 rounded-xl border border-border/50 bg-card/30 text-center";
+
+  const messageClassName =
+    tone === "destructive"
+      ? "text-destructive font-medium"
+      : "text-muted-foreground";
+
+  return (
+    <div className={containerClassName}>
+      <p className={messageClassName}>{message}</p>
+      <Button asChild variant="ghost" size="sm" className="mt-4 text-muted-foreground hover:text-foreground">
+        <Link to="/releases">View all changelogs</Link>
+      </Button>
+    </div>
+  );
+}
+
+function ReleaseDetailPage(): JSX.Element {
   const { tag } = Route.useParams();
   const { data: post, isLoading, error } = useNotraChangelogById(tag);
 
@@ -27,21 +54,11 @@ function ReleaseDetailPage() {
         {isLoading && <Spinner />}
 
         {error && (
-          <div className="p-6 rounded-xl border border-destructive/50 bg-destructive/10 text-center">
-            <p className="text-destructive font-medium">Could not load changelog.</p>
-            <Button asChild variant="ghost" size="sm" className="mt-4 text-muted-foreground hover:text-foreground">
-              <Link to="/releases">View all changelogs</Link>
-            </Button>
-          </div>
+          <EmptyState message="Could not load changelog." tone="destructive" />
         )}
 
         {!isLoading && !error && !post && (
-          <div className="p-6 rounded-xl border border-border/50 bg-card/30 text-center">
-            <p className="text-muted-foreground">Changelog not found.</p>
-            <Button asChild variant="ghost" size="sm" className="mt-4 text-muted-foreground hover:text-foreground">
-              <Link to="/releases">View all changelogs</Link>
-            </Button>
-          </div>
+          <EmptyState message="Changelog not found." tone="neutral" />
         )}
 
         {!isLoading && !error && post && (

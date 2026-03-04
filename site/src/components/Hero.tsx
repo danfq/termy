@@ -1,9 +1,8 @@
-import { useState, useRef, useEffect } from "react";
-import { Button } from "@/components/ui/button";
-import { InteractiveTerminal } from "@/components/InteractiveTerminal";
 import { Check, Copy } from "lucide-react";
-import type { Release } from "@/hooks/useGitHubRelease";
-import { getPreferredDownload } from "@/hooks/useGitHubRelease";
+import { type JSX, useEffect, useRef, useState } from "react";
+import { InteractiveTerminal } from "@/components/InteractiveTerminal";
+import { Button } from "@/components/ui/button";
+import { getPreferredDownload, type Release } from "@/hooks/useGitHubRelease";
 
 const installCommands = {
   homebrew:

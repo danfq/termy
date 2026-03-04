@@ -1,7 +1,8 @@
-import { useCallback } from "react";
 import { useNavigate } from "@tanstack/react-router";
+import { useCallback } from "react";
 
 export type SearchParams = { q?: string };
+type DocsRoutePath = "/docs/" | "/docs/$";
 
 export function validateSearch(search: Record<string, unknown>): SearchParams {
   return {
@@ -9,7 +10,7 @@ export function validateSearch(search: Record<string, unknown>): SearchParams {
   };
 }
 
-export function useDocSearchChange(from: string): (value: string) => void {
+export function useDocSearchChange(from: DocsRoutePath): (value: string) => void {
   const navigate = useNavigate({ from });
 
   return useCallback(

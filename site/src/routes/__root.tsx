@@ -1,11 +1,12 @@
 import { createRootRoute, Outlet } from "@tanstack/react-router";
+import type { JSX } from "react";
 import { Header } from "@/components/Header";
 
 export const Route = createRootRoute({
   component: RootLayout,
 });
 
-function RootLayout() {
+function RootLayout(): JSX.Element {
   return (
     <div className="min-h-screen bg-background">
       <Header />

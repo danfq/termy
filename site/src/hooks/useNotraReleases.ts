@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, type UseQueryResult } from "@tanstack/react-query";
 import type {
   ListPostsPost,
   ListPostsResponse,
@@ -29,14 +29,16 @@ async function fetchChangelogById(id: string): Promise<NotraPost | null> {
   return data.post ?? null;
 }
 
-export function useNotraChangelogs() {
+export function useNotraChangelogs(): UseQueryResult<NotraPost[], Error> {
   return useQuery({
     queryKey: ["notra-changelogs"],
     queryFn: fetchChangelogs,
   });
 }
 
-export function useNotraChangelogById(id: string) {
+export function useNotraChangelogById(
+  id: string,
+): UseQueryResult<NotraPost | null, Error> {
   return useQuery({
     queryKey: ["notra-changelog", id],
     queryFn: function queryById() {

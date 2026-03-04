@@ -1,8 +1,8 @@
-import { Button } from "@/components/ui/button";
-import { useTheme } from "@/hooks/useTheme";
 import { Link } from "@tanstack/react-router";
 import { Menu, Moon, Sun, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { type JSX, useEffect, useState } from "react";
+import { Button } from "@/components/ui/button";
+import { useTheme } from "@/hooks/useTheme";
 
 type NavLink =
   | { label: string; href: string; to?: never; external?: boolean }

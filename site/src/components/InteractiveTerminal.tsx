@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from "react";
+import { type JSX, useEffect, useRef, useState } from "react";
 
 const ASCII_ART = [
   "                  ..'",
@@ -47,8 +47,26 @@ const SYSTEM_INFO = [
 ];
 
 const COLOR_BLOCKS = [
-  ["#2e3436", "#cc0000", "#4e9a06", "#c4a000", "#3465a4", "#75507b", "#06989a", "#d3d7cf"],
-  ["#555753", "#ef2929", "#8ae234", "#fce94f", "#729fcf", "#ad7fa8", "#34e2e2", "#eeeeec"],
+  [
+    "#2e3436",
+    "#cc0000",
+    "#4e9a06",
+    "#c4a000",
+    "#3465a4",
+    "#75507b",
+    "#06989a",
+    "#d3d7cf",
+  ],
+  [
+    "#555753",
+    "#ef2929",
+    "#8ae234",
+    "#fce94f",
+    "#729fcf",
+    "#ad7fa8",
+    "#34e2e2",
+    "#eeeeec",
+  ],
 ];
 
 interface TerminalLine {
@@ -84,23 +102,90 @@ const KNOWN_COMMANDS: Record<string, string[]> = {
   uname: ["Darwin"],
 };
 
-function FastfetchOutput() {
+function getNextLineId(): number {
+  const currentId = nextLineId;
+  nextLineId += 1;
+  return currentId;
+}
+
+function createPromptLine(command: string): TerminalLine {
+  return {
+    id: getNextLineId(),
+    type: "prompt",
+    command,
+  };
+}
+
+function createOutputLine(content: string): TerminalLine {
+  return {
+    id: getNextLineId(),
+    type: "output",
+    content,
+  };
+}
+
+function createFastfetchLine(): TerminalLine {
+  return {
+    id: getNextLineId(),
+    type: "fastfetch",
+  };
+}
+
+function isFastfetchCommand(command: string): boolean {
+  return command === "fastfetch" || command === "neofetch";
+}
+
+function getPreviousHistoryIndex(
+  historyIndex: number,
+  historyLength: number,
+): number {
+  if (historyIndex === -1) {
+    return historyLength - 1;
+  }
+
+  return Math.max(0, historyIndex - 1);
+}
+
+function getNextHistoryIndex(historyIndex: number, historyLength: number): number {
+  if (historyIndex === -1) {
+    return -1;
+  }
+
+  const nextIndex = historyIndex + 1;
+
+  if (nextIndex >= historyLength) {
+    return -1;
+  }
+
+  return nextIndex;
+}
+
+function getCursorClassName(isFocused: boolean): string {
+  const baseClassName = "inline-block w-[8px] h-[15px] translate-y-[1px]";
+
+  if (isFocused) {
+    return `${baseClassName} bg-[#d1d5db] animate-terminal-blink`;
+  }
+
+  return `${baseClassName} bg-[#d1d5db]/40`;
+}
+
+function FastfetchOutput(): JSX.Element {
   const maxAsciiWidth = 40;
 
   return (
     <div className="flex gap-2">
-      {/* ASCII Art */}
       <div className="shrink-0 text-[#4ade80]">
-        {ASCII_ART.map((line, i) => (
-          <div key={i} className="leading-[1.25]">
+        {ASCII_ART.map((line, index) => (
+          <div key={index} className="leading-[1.25]">
             <span className="whitespace-pre">{line.padEnd(maxAsciiWidth)}</span>
           </div>
         ))}
       </div>
-      {/* System Info */}
+
       <div className="min-w-0">
-        {SYSTEM_INFO.map(([label, value], i) => (
-          <div key={i} className="leading-[1.25] whitespace-nowrap">
+        {SYSTEM_INFO.map(([label, value], index) => (
+          <div key={index} className="leading-[1.25] whitespace-nowrap">
             {label ? (
               <>
                 <span className="text-[#4ade80] font-bold">{label}</span>{" "}
@@ -111,13 +196,13 @@ function FastfetchOutput() {
             )}
           </div>
         ))}
-        {/* Color blocks */}
+
         <div className="mt-2 flex flex-col">
-          {COLOR_BLOCKS.map((row, ri) => (
-            <div key={ri} className="flex">
-              {row.map((color, ci) => (
+          {COLOR_BLOCKS.map((row, rowIndex) => (
+            <div key={rowIndex} className="flex">
+              {row.map((color, colorIndex) => (
                 <span
-                  key={ci}
+                  key={colorIndex}
                   className="inline-block w-[30px] h-[18px]"
                   style={{ backgroundColor: color }}
                 />
@@ -130,7 +215,7 @@ function FastfetchOutput() {
   );
 }
 
-function PromptPrefix() {
+function PromptPrefix(): JSX.Element {
   return (
     <span className="whitespace-pre shrink-0">
       <span className="text-[#4ade80]">→</span>
@@ -141,130 +226,168 @@ function PromptPrefix() {
   );
 }
 
-export function InteractiveTerminal() {
-  const [lines, setLines] = useState<TerminalLine[]>([
-    { id: nextLineId++, type: "prompt", command: "fastfetch" },
-    { id: nextLineId++, type: "fastfetch" },
+export function InteractiveTerminal(): JSX.Element {
+  const [lines, setLines] = useState<TerminalLine[]>(() => [
+    createPromptLine("fastfetch"),
+    createFastfetchLine(),
   ]);
   const [currentInput, setCurrentInput] = useState("");
   const [commandHistory, setCommandHistory] = useState<string[]>(["fastfetch"]);
   const [historyIndex, setHistoryIndex] = useState(-1);
-  const inputRef = useRef<HTMLInputElement>(null);
-  const terminalRef = useRef<HTMLDivElement>(null);
   const [isFocused, setIsFocused] = useState(false);
 
-  const scrollToBottom = useCallback(() => {
-    if (terminalRef.current) {
-      terminalRef.current.scrollTop = terminalRef.current.scrollHeight;
-    }
-  }, []);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const terminalRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    scrollToBottom();
-  }, [lines, scrollToBottom]);
-
-  const processCommand = useCallback((cmd: string) => {
-    const trimmed = cmd.trim();
-
-    if (trimmed === "clear") {
-      setLines([]);
+    if (!terminalRef.current) {
       return;
     }
 
-    setLines((prev) => {
-      const newLines: TerminalLine[] = [
-        ...prev,
-        { id: nextLineId++, type: "prompt", command: trimmed },
-      ];
+    terminalRef.current.scrollTop = terminalRef.current.scrollHeight;
+  }, [lines]);
 
-      if (!trimmed) return newLines;
+  function focusInput(): void {
+    inputRef.current?.focus();
+  }
 
-      if (trimmed === "fastfetch" || trimmed === "neofetch") {
-        newLines.push({ id: nextLineId++, type: "fastfetch" });
-        return newLines;
+  function clearTerminal(): void {
+    setLines([]);
+  }
+
+  function processCommand(command: string): void {
+    const trimmed = command.trim();
+
+    if (trimmed === "clear") {
+      clearTerminal();
+      return;
+    }
+
+    setLines((previousLines) => {
+      const updatedLines: TerminalLine[] = [...previousLines, createPromptLine(trimmed)];
+
+      if (!trimmed) {
+        return updatedLines;
+      }
+
+      if (isFastfetchCommand(trimmed)) {
+        updatedLines.push(createFastfetchLine());
+        return updatedLines;
       }
 
       if (trimmed.startsWith("echo ")) {
-        newLines.push({ id: nextLineId++, type: "output", content: trimmed.slice(5) });
-        return newLines;
+        updatedLines.push(createOutputLine(trimmed.slice(5)));
+        return updatedLines;
       }
 
       if (trimmed === "date") {
-        newLines.push({ id: nextLineId++, type: "output", content: new Date().toString() });
-        return newLines;
+        updatedLines.push(createOutputLine(new Date().toString()));
+        return updatedLines;
       }
 
-      const output = KNOWN_COMMANDS[trimmed];
-      if (output) {
-        if (output[0] === "fastfetch") {
-          newLines.push({ id: nextLineId++, type: "fastfetch" });
-        } else {
-          for (const line of output) {
-            newLines.push({ id: nextLineId++, type: "output", content: line });
-          }
-        }
-        return newLines;
+      const outputLines = KNOWN_COMMANDS[trimmed];
+      if (!outputLines) {
+        updatedLines.push(createOutputLine(`zsh: command not found: ${trimmed}`));
+        return updatedLines;
       }
 
-      newLines.push({
-        id: nextLineId++,
-        type: "output",
-        content: `zsh: command not found: ${trimmed}`,
-      });
-      return newLines;
+      if (outputLines[0] === "fastfetch") {
+        updatedLines.push(createFastfetchLine());
+        return updatedLines;
+      }
+
+      for (const outputLine of outputLines) {
+        updatedLines.push(createOutputLine(outputLine));
+      }
+
+      return updatedLines;
     });
-  }, []);
+  }
 
-  const handleKeyDown = useCallback(
-    (e: React.KeyboardEvent<HTMLInputElement>) => {
-      if (e.key === "Enter") {
-        e.preventDefault();
-        const cmd = inputRef.current?.value ?? "";
-        if (cmd.trim()) {
-          setCommandHistory((prev) => [...prev, cmd.trim()]);
+  function submitCurrentCommand(): void {
+    const command = currentInput;
+    const trimmedCommand = command.trim();
+
+    if (trimmedCommand) {
+      setCommandHistory((previousHistory) => [...previousHistory, trimmedCommand]);
+    }
+
+    setHistoryIndex(-1);
+    processCommand(command);
+    setCurrentInput("");
+  }
+
+  function showPreviousHistoryEntry(): void {
+    if (commandHistory.length === 0) {
+      return;
+    }
+
+    const nextIndex = getPreviousHistoryIndex(historyIndex, commandHistory.length);
+    setHistoryIndex(nextIndex);
+    setCurrentInput(commandHistory[nextIndex] ?? "");
+  }
+
+  function showNextHistoryEntry(): void {
+    const nextIndex = getNextHistoryIndex(historyIndex, commandHistory.length);
+    setHistoryIndex(nextIndex);
+
+    if (nextIndex === -1) {
+      setCurrentInput("");
+      return;
+    }
+
+    setCurrentInput(commandHistory[nextIndex] ?? "");
+  }
+
+  function handleKeyDown(event: React.KeyboardEvent<HTMLInputElement>): void {
+    switch (event.key) {
+      case "Enter":
+        event.preventDefault();
+        submitCurrentCommand();
+        return;
+      case "ArrowUp":
+        event.preventDefault();
+        showPreviousHistoryEntry();
+        return;
+      case "ArrowDown":
+        event.preventDefault();
+        showNextHistoryEntry();
+        return;
+      case "l":
+        if (event.ctrlKey) {
+          event.preventDefault();
+          clearTerminal();
         }
-        setHistoryIndex(-1);
-        processCommand(cmd);
-        setCurrentInput("");
-      } else if (e.key === "ArrowUp") {
-        e.preventDefault();
-        setCommandHistory((prev) => {
-          setHistoryIndex((hi) => {
-            const newIndex =
-              hi === -1 ? prev.length - 1 : Math.max(0, hi - 1);
-            if (prev[newIndex]) {
-              setCurrentInput(prev[newIndex]);
-            }
-            return newIndex;
-          });
-          return prev;
-        });
-      } else if (e.key === "ArrowDown") {
-        e.preventDefault();
-        setCommandHistory((prev) => {
-          setHistoryIndex((hi) => {
-            if (hi === -1) return -1;
-            const newIndex = hi + 1;
-            if (newIndex >= prev.length) {
-              setCurrentInput("");
-              return -1;
-            }
-            setCurrentInput(prev[newIndex]);
-            return newIndex;
-          });
-          return prev;
-        });
-      } else if (e.key === "l" && e.ctrlKey) {
-        e.preventDefault();
-        setLines([]);
-      }
-    },
-    [processCommand],
-  );
+        return;
+      default:
+        return;
+    }
+  }
 
-  const focusInput = useCallback(() => {
-    inputRef.current?.focus();
-  }, []);
+  function renderLine(line: TerminalLine): JSX.Element {
+    if (line.type === "fastfetch") {
+      return (
+        <div key={line.id} className="mb-3">
+          <FastfetchOutput />
+        </div>
+      );
+    }
+
+    if (line.type === "prompt") {
+      return (
+        <div key={line.id} className="flex">
+          <PromptPrefix />
+          <span className="text-[#d1d5db]">{line.command}</span>
+        </div>
+      );
+    }
+
+    return (
+      <div key={line.id} className="text-[#d1d5db]">
+        {line.content || "\u00A0"}
+      </div>
+    );
+  }
 
   return (
     <div
@@ -272,31 +395,8 @@ export function InteractiveTerminal() {
       ref={terminalRef}
       onClick={focusInput}
     >
-      {/* Rendered lines */}
-      {lines.map((line) => {
-        if (line.type === "fastfetch") {
-          return (
-            <div key={line.id} className="mb-3">
-              <FastfetchOutput />
-            </div>
-          );
-        }
-        if (line.type === "prompt") {
-          return (
-            <div key={line.id} className="flex">
-              <PromptPrefix />
-              <span className="text-[#d1d5db]">{line.command}</span>
-            </div>
-          );
-        }
-        return (
-          <div key={line.id} className="text-[#d1d5db]">
-            {line.content || "\u00A0"}
-          </div>
-        );
-      })}
+      {lines.map(renderLine)}
 
-      {/* Active input line */}
       <div className="flex items-center">
         <PromptPrefix />
         <div className="relative flex-1">
@@ -304,7 +404,7 @@ export function InteractiveTerminal() {
             ref={inputRef}
             type="text"
             value={currentInput}
-            onChange={(e) => setCurrentInput(e.target.value)}
+            onChange={(event) => setCurrentInput(event.target.value)}
             onKeyDown={handleKeyDown}
             onFocus={() => setIsFocused(true)}
             onBlur={() => setIsFocused(false)}
@@ -314,19 +414,13 @@ export function InteractiveTerminal() {
             autoCapitalize="off"
             autoFocus={false}
           />
-          {/* Custom block cursor */}
+
           <span
             className="absolute top-0 left-0 pointer-events-none text-transparent"
             style={{ fontSize: "inherit", lineHeight: "inherit" }}
           >
             {currentInput}
-            <span
-              className={`inline-block w-[8px] h-[15px] translate-y-[1px] ${
-                isFocused
-                  ? "bg-[#d1d5db] animate-terminal-blink"
-                  : "bg-[#d1d5db]/40"
-              }`}
-            />
+            <span className={getCursorClassName(isFocused)} />
           </span>
         </div>
       </div>

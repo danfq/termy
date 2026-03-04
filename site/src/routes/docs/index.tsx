@@ -1,16 +1,23 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { getDocsByCategory, sortDocCategories } from "@/lib/docs";
-import { Button } from "@/components/ui/button";
 import { ChevronLeft } from "lucide-react";
+import type { JSX } from "react";
 import { Sidebar } from "@/components/docs/Sidebar";
+import { Button } from "@/components/ui/button";
 import { validateSearch, useDocSearchChange } from "@/hooks/useDocSearch";
+import { getDocsByCategory, sortDocCategories } from "@/lib/docs";
+
+const START_HERE_DOCS = [
+  { slug: "installation", label: "Install Termy" },
+  { slug: "first-steps", label: "First Steps" },
+  { slug: "troubleshooting", label: "Troubleshooting" },
+] as const;
 
 export const Route = createFileRoute("/docs/")({
   component: DocsPage,
   validateSearch,
 });
 
-function DocsPage() {
+function DocsPage(): JSX.Element {
   const { q: search = "" } = Route.useSearch();
   const docsByCategory = getDocsByCategory();
   const categories = sortDocCategories(Object.keys(docsByCategory));
@@ -49,27 +56,16 @@ function DocsPage() {
               Start Here
             </h2>
             <div className="grid gap-3 sm:grid-cols-3">
-              <Link
-                to="/docs/$"
-                params={{ _splat: "installation" }}
-                className="rounded-lg border border-border/50 bg-background/50 px-4 py-3 text-sm text-foreground hover:border-primary/40 transition-colors"
-              >
-                Install Termy
-              </Link>
-              <Link
-                to="/docs/$"
-                params={{ _splat: "first-steps" }}
-                className="rounded-lg border border-border/50 bg-background/50 px-4 py-3 text-sm text-foreground hover:border-primary/40 transition-colors"
-              >
-                First Steps
-              </Link>
-              <Link
-                to="/docs/$"
-                params={{ _splat: "troubleshooting" }}
-                className="rounded-lg border border-border/50 bg-background/50 px-4 py-3 text-sm text-foreground hover:border-primary/40 transition-colors"
-              >
-                Troubleshooting
-              </Link>
+              {START_HERE_DOCS.map((doc) => (
+                <Link
+                  key={doc.slug}
+                  to="/docs/$"
+                  params={{ _splat: doc.slug }}
+                  className="rounded-lg border border-border/50 bg-background/50 px-4 py-3 text-sm text-foreground hover:border-primary/40 transition-colors"
+                >
+                  {doc.label}
+                </Link>
+              ))}
             </div>
           </div>
 

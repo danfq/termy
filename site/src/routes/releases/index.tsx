@@ -1,17 +1,19 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { useNotraChangelogs } from "@/hooks/useNotraReleases";
+import { ChevronLeft } from "lucide-react";
+import type { JSX } from "react";
+import Markdown from "react-markdown";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
+import { useNotraChangelogs } from "@/hooks/useNotraReleases";
 import { formatDate, proseClasses } from "@/lib/utils";
-import { ChevronLeft } from "lucide-react";
-import Markdown from "react-markdown";
 
 export const Route = createFileRoute("/releases/")({
   component: ReleasesPage,
 });
 
-function ReleasesPage() {
+function ReleasesPage(): JSX.Element {
   const { data: posts, isLoading, error } = useNotraChangelogs();
+  const hasPosts = !isLoading && !error && Boolean(posts);
 
   return (
     <section className="pt-32 pb-20">
@@ -39,7 +41,7 @@ function ReleasesPage() {
           </div>
         )}
 
-        {!isLoading && !error && posts && (
+        {hasPosts && posts && (
           <div className="space-y-12">
             {posts.map((post, index) => (
               <article key={post.id}>

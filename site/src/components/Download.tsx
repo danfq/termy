@@ -1,9 +1,14 @@
-import { formatDate } from "@/lib/utils";
-import { Spinner } from "@/components/ui/spinner";
-import { AppleIcon, WindowsIcon, LinuxIcon } from "@/components/platform-icons";
 import { ChevronDown, ExternalLink } from "lucide-react";
-import type { Release, Asset } from "@/hooks/useGitHubRelease";
-import { classifyAssets, formatBytes } from "@/hooks/useGitHubRelease";
+import type { JSX } from "react";
+import { AppleIcon, LinuxIcon, WindowsIcon } from "@/components/platform-icons";
+import { Spinner } from "@/components/ui/spinner";
+import {
+  classifyAssets,
+  formatBytes,
+  type Asset,
+  type Release,
+} from "@/hooks/useGitHubRelease";
+import { formatDate } from "@/lib/utils";
 
 interface DownloadProps {
   release: Release | null;

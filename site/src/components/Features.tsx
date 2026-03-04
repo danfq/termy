@@ -1,5 +1,5 @@
-import type { ReactNode } from "react";
-import { AppleIcon, WindowsIcon, LinuxIcon } from "@/components/platform-icons";
+import type { JSX, ReactNode } from "react";
+import { AppleIcon, LinuxIcon, WindowsIcon } from "@/components/platform-icons";
 
 interface Feature {
   tag: string;
@@ -267,7 +267,7 @@ function FeatureCard({
 }: {
   feature: Feature;
   index: number;
-}) {
+}): JSX.Element {
   return (
     <div
       className="animate-blur-in group flex flex-col rounded-xl border border-border/40 bg-card/30 transition-all duration-300 hover:border-primary/20 hover:bg-card/60 overflow-hidden"
@@ -297,7 +297,7 @@ function FeatureCard({
   );
 }
 
-export function Features() {
+export function Features(): JSX.Element {
   return (
     <section id="features" className="py-24">
       <div

@@ -1,3 +1,5 @@
+import type { JSX } from "react";
+
 export function Spinner(): JSX.Element {
   return (
     <div className="flex items-center justify-center py-12">
