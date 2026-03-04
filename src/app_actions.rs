@@ -60,11 +60,13 @@ pub(crate) fn open_settings_window(cx: &mut App) -> Result<(), String> {
     let titlebar = Some(gpui::TitlebarOptions {
         title: Some("Settings".into()),
         appears_transparent: true,
+        traffic_light_position: None,
     });
     #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
     let titlebar = Some(gpui::TitlebarOptions {
         title: Some("Settings".into()),
         appears_transparent: true,
+        traffic_light_position: None,
     });
 
     cx.open_window(

@@ -38,10 +38,8 @@ use termy_terminal_ui::{
     TerminalUiRenderMetricsSnapshot, terminal_ui_render_metrics_reset,
     terminal_ui_render_metrics_snapshot,
 };
-use termy_toast::ToastManager;
-
-#[cfg(target_os = "macos")]
 use gpui::AppContext;
+use termy_toast::ToastManager;
 #[cfg(target_os = "macos")]
 use termy_auto_update::{AutoUpdater, UpdateState};
 

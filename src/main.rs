@@ -121,11 +121,13 @@ fn main() {
         let titlebar = Some(gpui::TitlebarOptions {
             title: None,
             appears_transparent: true,
+            traffic_light_position: None,
         });
         #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
         let titlebar = Some(gpui::TitlebarOptions {
             title: None,
             appears_transparent: true,
+            traffic_light_position: None,
         });
 
         cx.open_window(
