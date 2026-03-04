@@ -121,6 +121,7 @@ impl TerminalTab {
             shell_title: None,
             pending_command_title: None,
             pending_command_token: 0,
+            last_prompt_cwd: None,
             title,
             title_text_width,
             sticky_title_width,

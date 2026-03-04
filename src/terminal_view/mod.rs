@@ -18,6 +18,7 @@ use gpui::{
 };
 use std::{
     cell::RefCell,
+    collections::{HashMap, HashSet},
     env,
     path::{Path, PathBuf},
     process::{Command, Stdio},
@@ -79,6 +80,7 @@ const COMMAND_TITLE_DELAY_MS: u64 = 250;
 const CONFIG_WATCH_INTERVAL_MS: u64 = 750;
 const CURSOR_BLINK_INTERVAL_MS: u64 = 530;
 const TMUX_TITLE_REFRESH_DEBOUNCE_MS: u64 = 120;
+const CHILD_WORKING_DIR_CACHE_TTL_MS: u64 = 1500;
 const SELECTION_BG_ALPHA: f32 = 0.35;
 const DIM_TEXT_FACTOR: f32 = 0.66;
 #[cfg(target_os = "macos")]
@@ -117,6 +119,7 @@ const TMUX_UNSUPPORTED_WINDOWS_TOAST: &str =
     "tmux integration is unsupported on Windows; using native runtime instead.";
 const INPUT_SCROLL_SUPPRESS_MS: u64 = 160;
 const TOAST_COPY_FEEDBACK_MS: u64 = 1200;
+const CHILD_WORKING_DIR_CACHE_TTL: Duration = Duration::from_millis(CHILD_WORKING_DIR_CACHE_TTL_MS);
 const OVERLAY_PANEL_ALPHA_FLOOR_RATIO: f32 = 0.72;
 const OVERLAY_PANEL_BORDER_ALPHA: f32 = 0.24;
 const OVERLAY_PRIMARY_TEXT_ALPHA: f32 = 0.95;
@@ -314,6 +317,16 @@ impl Terminal {
                 .lock()
                 .map(|terminal| terminal.size())
                 .unwrap_or_default(),
+        }
+    }
+
+    fn child_pid(&self) -> Option<u32> {
+        match self {
+            Self::Tmux(_) => None,
+            Self::Native(terminal) => terminal
+                .lock()
+                .ok()
+                .and_then(|terminal| terminal.child_pid()),
         }
     }
 
@@ -584,6 +597,7 @@ struct TerminalTab {
     shell_title: Option<String>,
     pending_command_title: Option<String>,
     pending_command_token: u64,
+    last_prompt_cwd: Option<String>,
     title: String,
     title_text_width: f32,
     sticky_title_width: f32,
@@ -612,9 +626,15 @@ impl TerminalTab {
 }
 
 enum ExplicitTitlePayload {
-    Prompt(String),
+    Prompt { title: String, cwd: String },
     Command(String),
     Title(String),
+}
+
+#[derive(Clone, Debug)]
+struct ChildWorkingDirCacheEntry {
+    value: Option<String>,
+    resolved_at: Instant,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -903,6 +923,8 @@ pub struct TerminalView {
     show_termy_in_titlebar: bool,
     tab_shell_integration: TabTitleShellIntegration,
     configured_working_dir: Option<String>,
+    child_working_dir_cache: HashMap<u32, ChildWorkingDirCacheEntry>,
+    child_working_dir_lookup_pending: HashSet<u32>,
     terminal_runtime: TerminalRuntimeConfig,
     runtime: RuntimeState,
     tmux_enabled_config: bool,
@@ -1092,6 +1114,166 @@ impl TerminalView {
         Some(Self::display_working_directory_for_prompt(&path))
     }
 
+    fn working_dir_title_candidate(value: &str) -> Option<&str> {
+        let value = value.trim();
+        if value.is_empty() {
+            return None;
+        }
+
+        if let Some(prompt) = value.rsplit_once("prompt:").map(|(_, prompt)| prompt.trim()) {
+            if !prompt.is_empty() {
+                return Some(prompt);
+            }
+        }
+
+        if let Some(cwd) = value.strip_prefix("cwd:").map(str::trim) {
+            if !cwd.is_empty() {
+                return Some(cwd);
+            }
+        }
+
+        Some(value)
+    }
+
+    fn looks_like_working_dir_path(value: &str) -> bool {
+        value.starts_with(std::path::MAIN_SEPARATOR)
+            || value == "~"
+            || value.starts_with("~/")
+            || value.starts_with("~\\")
+            || value
+                .chars()
+                .nth(1)
+                .is_some_and(|ch| ch == ':')
+                && value
+                    .chars()
+                    .next()
+                    .is_some_and(|first| first.is_ascii_alphabetic())
+                && value
+                    .chars()
+                    .nth(2)
+                    .is_some_and(|sep| sep == '/' || sep == '\\')
+    }
+
+    fn working_dir_for_child_pid_blocking(pid: u32) -> Option<String> {
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        {
+            let path = std::fs::read_link(format!("/proc/{pid}/cwd")).ok()?;
+            return path.is_dir().then(|| path.to_string_lossy().into_owned());
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            let output = Command::new("lsof")
+                .args(["-a", "-d", "cwd", "-p", &pid.to_string(), "-Fn"])
+                .stdin(Stdio::null())
+                .stderr(Stdio::null())
+                .output()
+                .ok()?;
+            if !output.status.success() {
+                return None;
+            }
+            for line in String::from_utf8_lossy(&output.stdout).lines() {
+                if let Some(path) = line.strip_prefix('n') {
+                    let path = path.trim();
+                    if !path.is_empty() {
+                        return Some(path.to_string());
+                    }
+                }
+            }
+            None
+        }
+
+        #[cfg(not(any(
+            target_os = "linux",
+            target_os = "android",
+            target_os = "macos"
+        )))]
+        {
+            let _ = pid;
+            None
+        }
+    }
+
+    fn complete_child_working_dir_lookup(&mut self, pid: u32, value: Option<String>) {
+        self.child_working_dir_lookup_pending.remove(&pid);
+        self.child_working_dir_cache.insert(
+            pid,
+            ChildWorkingDirCacheEntry {
+                value,
+                resolved_at: Instant::now(),
+            },
+        );
+    }
+
+    fn schedule_child_working_dir_lookup(&mut self, pid: u32, cx: &mut Context<Self>) {
+        if !self.child_working_dir_lookup_pending.insert(pid) {
+            return;
+        }
+
+        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let value = smol::unblock(move || Self::working_dir_for_child_pid_blocking(pid)).await;
+            let _ = cx.update(|cx| {
+                this.update(cx, |view, _cx| {
+                    view.complete_child_working_dir_lookup(pid, value);
+                })
+            });
+        })
+        .detach();
+    }
+
+    fn cached_or_queued_working_dir_for_child_pid(
+        &mut self,
+        pid: u32,
+        cx: &mut Context<Self>,
+    ) -> Option<String> {
+        if let Some((cached_value, resolved_at)) = self
+            .child_working_dir_cache
+            .get(&pid)
+            .map(|entry| (entry.value.clone(), entry.resolved_at))
+        {
+            let is_fresh =
+                Instant::now().saturating_duration_since(resolved_at) <= CHILD_WORKING_DIR_CACHE_TTL;
+            if !is_fresh {
+                self.schedule_child_working_dir_lookup(pid, cx);
+            }
+            return cached_value;
+        }
+
+        self.schedule_child_working_dir_lookup(pid, cx);
+        None
+    }
+
+    fn preferred_working_dir_for_new_native_session(&mut self, cx: &mut Context<Self>) -> Option<String> {
+        let active_tab = self.active_tab;
+        let prompt_cwd = self.tabs.get(active_tab).and_then(|tab| tab.last_prompt_cwd.clone());
+        let process_cwd = self
+            .tabs
+            .get(active_tab)
+            .and_then(TerminalTab::active_terminal)
+            .and_then(Terminal::child_pid)
+            .and_then(|pid| self.cached_or_queued_working_dir_for_child_pid(pid, cx));
+        let title_cwd = self
+            .tabs
+            .get(active_tab)
+            .and_then(|tab| {
+                [
+                    tab.explicit_title.as_deref(),
+                    tab.shell_title.as_deref(),
+                    Some(tab.title.as_str()),
+                ]
+                .into_iter()
+                .flatten()
+                .find_map(Self::working_dir_title_candidate)
+                .map(str::to_string)
+            })
+            .filter(|candidate| Self::looks_like_working_dir_path(candidate.as_str()));
+
+        prompt_cwd
+            .or(process_cwd)
+            .or(title_cwd)
+            .or_else(|| self.configured_working_dir.clone())
+    }
+
     fn runtime_kind(&self) -> RuntimeKind {
         self.runtime.kind()
     }
@@ -1152,6 +1334,7 @@ impl TerminalView {
             shell_title: None,
             pending_command_title: None,
             pending_command_token: 0,
+            last_prompt_cwd: None,
             title,
             title_text_width,
             sticky_title_width,
@@ -1726,6 +1909,8 @@ impl TerminalView {
             show_termy_in_titlebar: config.show_termy_in_titlebar,
             tab_shell_integration,
             configured_working_dir,
+            child_working_dir_cache: HashMap::new(),
+            child_working_dir_lookup_pending: HashSet::new(),
             terminal_runtime,
             runtime,
             tmux_enabled_config: config.tmux_enabled,

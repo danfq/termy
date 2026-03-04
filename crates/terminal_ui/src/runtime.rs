@@ -303,6 +303,21 @@ fn default_working_directory_with_fallback(fallback: WorkingDirFallback) -> Opti
     env::current_dir().ok()
 }
 
+#[cfg(unix)]
+fn pty_child_pid(pty: &tty::Pty) -> Option<u32> {
+    Some(pty.child().id())
+}
+
+#[cfg(target_os = "windows")]
+fn pty_child_pid(pty: &tty::Pty) -> Option<u32> {
+    pty.child_watcher().pid().map(|pid| pid.get())
+}
+
+#[cfg(not(any(unix, target_os = "windows")))]
+fn pty_child_pid(_pty: &tty::Pty) -> Option<u32> {
+    None
+}
+
 /// Events sent from the terminal to the view
 #[derive(Debug, Clone)]
 pub enum TerminalEvent {
@@ -507,6 +522,8 @@ pub struct Terminal {
     events_rx: Receiver<AlacEvent>,
     /// Current terminal size
     size: TerminalSize,
+    /// Shell process id backing this PTY.
+    child_pid: Option<u32>,
     /// Tracks whether a wakeup event is already queued.
     wakeup_queued: Arc<AtomicBool>,
 }
@@ -569,6 +586,7 @@ impl Terminal {
         // Create PTY
         let window_id = 0;
         let pty = tty::new(&pty_options, size.into(), window_id)?;
+        let child_pid = pty_child_pid(&pty);
 
         // Create and spawn the event loop
         let event_loop = EventLoop::new(term.clone(), listener, pty, false, false)?;
@@ -580,8 +598,13 @@ impl Terminal {
             pty_tx,
             events_rx,
             size,
+            child_pid,
             wakeup_queued,
         })
+    }
+
+    pub fn child_pid(&self) -> Option<u32> {
+        self.child_pid
     }
 
     /// Write bytes to the PTY (user input)

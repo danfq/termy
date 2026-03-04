@@ -179,11 +179,10 @@ impl TerminalView {
             if prompt.is_empty() {
                 return None;
             }
-            return Some(ExplicitTitlePayload::Prompt(Self::resolve_template(
-                &self.tab_title.prompt_format,
-                Some(prompt),
-                None,
-            )));
+            return Some(ExplicitTitlePayload::Prompt {
+                title: Self::resolve_template(&self.tab_title.prompt_format, Some(prompt), None),
+                cwd: prompt.to_string(),
+            });
         }
 
         if let Some(command) = payload.strip_prefix("command:") {
@@ -264,10 +263,11 @@ impl TerminalView {
 
         if let Some(explicit_payload) = self.parse_explicit_title(title) {
             return match explicit_payload {
-                ExplicitTitlePayload::Prompt(prompt_title) => {
+                ExplicitTitlePayload::Prompt { title, cwd } => {
+                    self.tabs[index].last_prompt_cwd = Some(cwd);
                     self.tabs[index].running_process = false;
                     self.cancel_pending_command_title(index);
-                    self.set_explicit_title(index, prompt_title)
+                    self.set_explicit_title(index, title)
                 }
                 ExplicitTitlePayload::Title(prompt_title) => {
                     self.cancel_pending_command_title(index);
