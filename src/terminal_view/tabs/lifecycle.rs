@@ -222,9 +222,10 @@ impl TerminalView {
                     .active_terminal()
                     .map(|terminal| terminal.size())
                     .unwrap_or_default();
+                let preferred_working_dir = self.preferred_working_dir_for_new_native_session();
                 let terminal = match Terminal::new_native(
                     size,
-                    self.configured_working_dir.as_deref(),
+                    preferred_working_dir.as_deref(),
                     Some(self.event_wakeup_tx.clone()),
                     Some(&self.tab_shell_integration),
                     Some(&self.terminal_runtime),
@@ -237,7 +238,7 @@ impl TerminalView {
                 };
 
                 let predicted_prompt_cwd = Self::predicted_prompt_cwd(
-                    self.configured_working_dir.as_deref(),
+                    preferred_working_dir.as_deref(),
                     self.terminal_runtime.working_dir_fallback,
                 );
                 let predicted_title = Self::predicted_prompt_seed_title(
@@ -541,13 +542,14 @@ impl TerminalView {
     }
 
     fn native_make_terminal(&self, cols: u16, rows: u16) -> Result<Terminal, String> {
+        let preferred_working_dir = self.preferred_working_dir_for_new_native_session();
         Terminal::new_native(
             TerminalSize {
                 cols: cols.max(1),
                 rows: rows.max(1),
                 ..TerminalSize::default()
             },
-            self.configured_working_dir.as_deref(),
+            preferred_working_dir.as_deref(),
             Some(self.event_wakeup_tx.clone()),
             Some(&self.tab_shell_integration),
             Some(&self.terminal_runtime),

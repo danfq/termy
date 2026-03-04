@@ -317,6 +317,16 @@ impl Terminal {
         }
     }
 
+    fn child_pid(&self) -> Option<u32> {
+        match self {
+            Self::Tmux(_) => None,
+            Self::Native(terminal) => terminal
+                .lock()
+                .ok()
+                .and_then(|terminal| terminal.child_pid()),
+        }
+    }
+
     fn scroll_display(&self, delta_lines: i32) -> bool {
         match self {
             Self::Tmux(terminal) => terminal.scroll_display(delta_lines),
@@ -584,6 +594,7 @@ struct TerminalTab {
     shell_title: Option<String>,
     pending_command_title: Option<String>,
     pending_command_token: u64,
+    last_prompt_cwd: Option<String>,
     title: String,
     title_text_width: f32,
     sticky_title_width: f32,
@@ -612,7 +623,7 @@ impl TerminalTab {
 }
 
 enum ExplicitTitlePayload {
-    Prompt(String),
+    Prompt { title: String, cwd: String },
     Command(String),
     Title(String),
 }
@@ -1092,6 +1103,113 @@ impl TerminalView {
         Some(Self::display_working_directory_for_prompt(&path))
     }
 
+    fn working_dir_title_candidate(value: &str) -> Option<&str> {
+        let value = value.trim();
+        if value.is_empty() {
+            return None;
+        }
+
+        if let Some(prompt) = value.rsplit_once("prompt:").map(|(_, prompt)| prompt.trim()) {
+            if !prompt.is_empty() {
+                return Some(prompt);
+            }
+        }
+
+        if let Some(cwd) = value.strip_prefix("cwd:").map(str::trim) {
+            if !cwd.is_empty() {
+                return Some(cwd);
+            }
+        }
+
+        Some(value)
+    }
+
+    fn looks_like_working_dir_path(value: &str) -> bool {
+        value.starts_with(std::path::MAIN_SEPARATOR)
+            || value == "~"
+            || value.starts_with("~/")
+            || value.starts_with("~\\")
+            || value
+                .chars()
+                .nth(1)
+                .is_some_and(|ch| ch == ':')
+                && value
+                    .chars()
+                    .next()
+                    .is_some_and(|first| first.is_ascii_alphabetic())
+                && value
+                    .chars()
+                    .nth(2)
+                    .is_some_and(|sep| sep == '/' || sep == '\\')
+    }
+
+    fn working_dir_for_child_pid(pid: u32) -> Option<String> {
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        {
+            let path = std::fs::read_link(format!("/proc/{pid}/cwd")).ok()?;
+            return path.is_dir().then(|| path.to_string_lossy().into_owned());
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            let output = Command::new("lsof")
+                .args(["-a", "-d", "cwd", "-p", &pid.to_string(), "-Fn"])
+                .stdin(Stdio::null())
+                .stderr(Stdio::null())
+                .output()
+                .ok()?;
+            if !output.status.success() {
+                return None;
+            }
+            for line in String::from_utf8_lossy(&output.stdout).lines() {
+                if let Some(path) = line.strip_prefix('n') {
+                    let path = path.trim();
+                    if !path.is_empty() {
+                        return Some(path.to_string());
+                    }
+                }
+            }
+            None
+        }
+
+        #[cfg(not(any(
+            target_os = "linux",
+            target_os = "android",
+            target_os = "macos"
+        )))]
+        {
+            let _ = pid;
+            None
+        }
+    }
+
+    fn preferred_working_dir_for_new_native_session(&self) -> Option<String> {
+        let active_tab = self.tabs.get(self.active_tab);
+        let prompt_cwd = active_tab.and_then(|tab| tab.last_prompt_cwd.clone());
+        let process_cwd = active_tab
+            .and_then(TerminalTab::active_terminal)
+            .and_then(Terminal::child_pid)
+            .and_then(Self::working_dir_for_child_pid);
+        let title_cwd = active_tab
+            .and_then(|tab| {
+                [
+                    tab.explicit_title.as_deref(),
+                    tab.shell_title.as_deref(),
+                    Some(tab.title.as_str()),
+                ]
+                .into_iter()
+                .flatten()
+                .find_map(Self::working_dir_title_candidate)
+                .map(str::to_string)
+            })
+            .filter(|candidate| Self::looks_like_working_dir_path(candidate.as_str()));
+
+        prompt_cwd
+            .or(process_cwd)
+            .or(title_cwd)
+            .or_else(|| self.configured_working_dir.clone())
+    }
+
     fn runtime_kind(&self) -> RuntimeKind {
         self.runtime.kind()
     }
@@ -1152,6 +1270,7 @@ impl TerminalView {
             shell_title: None,
             pending_command_title: None,
             pending_command_token: 0,
+            last_prompt_cwd: None,
             title,
             title_text_width,
             sticky_title_width,
