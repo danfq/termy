@@ -129,6 +129,13 @@ impl AppConfig {
                         );
                     }
                 }
+                RootSettingId::AutoUpdate => {
+                    if let Some(parsed) =
+                        parse_bool_field(&mut diagnostics, line_number, key, value)
+                    {
+                        config.auto_update = parsed;
+                    }
+                }
                 RootSettingId::TmuxEnabled => {
                     if let Some(parsed) =
                         parse_bool_field(&mut diagnostics, line_number, key, value)

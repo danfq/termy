@@ -185,6 +185,11 @@ Tmux integration is an add-on. Set `tmux_enabled = true` to start in tmux mode b
 
 ## Advanced
 
+`auto_update`
+- Default: `true`
+- Enable automatic update checks and notifications
+- Group: `UPDATES`
+
 `working_dir`
 - Default: unset
 - Initial directory for new sessions
@@ -211,10 +216,27 @@ Tmux integration is an add-on. Set `tmux_enabled = true` to start in tmux mode b
 - Default startup window height in pixels
 - Group: `WINDOW`
 
+`ai_provider`
+- Default: `openai`
+- Provider used for AI input and model listing
+- Group: `AI`
+
 `openai_api_key`
 - Default: unset
 - Aliases: `openai_key`
 - API key for OpenAI integration
+- Group: `AI`
+
+`gemini_api_key`
+- Default: unset
+- Aliases: `google_ai_api_key`
+- API key for Google Gemini integration
+- Group: `AI`
+
+`openai_model`
+- Default: unset
+- Aliases: `ai_model`
+- Model used for AI input requests
 - Group: `AI`
 
 ## Keybindings

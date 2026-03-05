@@ -1239,6 +1239,28 @@ impl SettingsWindow {
         ];
         let ai_group = self.render_settings_group("AI", ai_rows);
 
+        let auto_update_meta = Self::setting_metadata_or_fallback("auto_update");
+        let auto_update = self.config.auto_update;
+        let updates_rows = vec![self.render_setting_row(
+            "auto_update",
+            "auto_update-toggle",
+            auto_update_meta.title,
+            auto_update_meta.description,
+            auto_update,
+            cx,
+            |view, _cx| {
+                let next = !view.config.auto_update;
+                match config::set_root_setting(RootSettingId::AutoUpdate, &next.to_string()) {
+                    Ok(()) => {
+                        view.config.auto_update = next;
+                        termy_toast::success("Saved");
+                    }
+                    Err(error) => termy_toast::error(error),
+                }
+            },
+        )];
+        let updates_group = self.render_settings_group("UPDATES", updates_rows);
+
         let config_file_card = div()
             .py_4()
             .px_4()
@@ -1301,6 +1323,7 @@ impl SettingsWindow {
             .child(safety_group)
             .child(window_group)
             .child(ai_group)
+            .child(updates_group)
             .child(config_group)
     }
 }

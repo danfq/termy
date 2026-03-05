@@ -1,6 +1,8 @@
 # Main settings
 # Current color scheme name
 theme = termy
+# Enable automatic update checks and notifications
+auto_update = true
 # Enable tmux runtime integration
 tmux_enabled = false
 # Reuse tmux tabs and panes across app restarts
@@ -80,11 +82,11 @@ command_palette_show_keybinds = true
 # Provider used for AI input and model listing
 ai_provider = openai
 # API key for OpenAI integration
-# openai_api_key = none
+openai_api_key = none
 # API key for Google Gemini integration
-# gemini_api_key = none
-# Model used for AI input requests (provider-specific)
-# openai_model = gpt-5-mini
+gemini_api_key = none
+# Model used for AI input requests
+openai_model = none
 
 # Keybindings (repeatable)
 # tmux-only keybind actions require an active tmux session
@@ -92,7 +94,7 @@ ai_provider = openai
 # keybind = cmd-c=copy
 # keybind = cmd-c=unbind
 # keybind = clear
-# keybind = secondary-d=split_pane_vertical
+# keybind = secondary-alt-shift-left=resize_pane_left
 
 # Color overrides
 [colors]
