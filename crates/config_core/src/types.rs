@@ -265,6 +265,7 @@ pub struct CustomColors {
 #[derive(Debug, Clone, PartialEq)]
 pub struct AppConfig {
     pub theme: ThemeId,
+    pub auto_update: bool,
     pub tmux_enabled: bool,
     pub tmux_persistence: bool,
     pub tmux_binary: String,
@@ -315,6 +316,7 @@ impl Default for AppConfig {
     fn default() -> Self {
         Self {
             theme: "termy".to_string(),
+            auto_update: true,
             tmux_enabled: DEFAULT_TMUX_ENABLED,
             tmux_persistence: DEFAULT_TMUX_PERSISTENCE,
             tmux_binary: DEFAULT_TMUX_BINARY.to_string(),

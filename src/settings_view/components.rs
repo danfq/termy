@@ -93,7 +93,7 @@ impl SettingsWindow {
                     .child("Reset section")
                     .when(can_reset, |s| {
                         s.on_click(cx.listener(move |view, _, _, cx| {
-                            view.reset_section_to_defaults(section, cx);
+                            view.confirm_reset_section_to_defaults(section, cx);
                         }))
                     }),
             )
@@ -149,7 +149,7 @@ impl SettingsWindow {
             .child("Reset")
             .when(can_reset, |s| {
                 s.on_click(cx.listener(move |view, _, _, cx| {
-                    view.reset_setting_to_default(setting_key, cx);
+                    view.confirm_reset_setting_to_default(setting_key, cx);
                 }))
             })
     }

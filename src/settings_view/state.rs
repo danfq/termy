@@ -332,6 +332,64 @@ impl SettingsWindow {
         }
     }
 
+    pub(super) fn confirm_reset_section_to_defaults(
+        &mut self,
+        section: SettingsSection,
+        cx: &mut Context<Self>,
+    ) {
+        let section_name = match section {
+            SettingsSection::Appearance => "Appearance",
+            SettingsSection::Terminal => "Terminal",
+            SettingsSection::Tabs => "Tabs",
+            SettingsSection::Advanced => "Advanced",
+            SettingsSection::Colors => "Colors",
+            SettingsSection::Keybindings => "Keybindings",
+            SettingsSection::ThemeStore => return,
+        };
+        let title = "Reset Section";
+        let message = format!(
+            "Are you sure you want to reset all {} settings to their default values?",
+            section_name
+        );
+
+        cx.spawn(async move |this, cx: &mut AsyncApp| {
+            let confirmed = termy_native_sdk::confirm(title, &message);
+            if !confirmed {
+                return;
+            }
+
+            let _ = cx.update(|cx| {
+                this.update(cx, |view, cx| {
+                    view.reset_section_to_defaults(section, cx);
+                })
+            });
+        })
+        .detach();
+    }
+
+    pub(super) fn confirm_reset_setting_to_default(
+        &mut self,
+        setting_key: &'static str,
+        cx: &mut Context<Self>,
+    ) {
+        let title = "Reset Setting";
+        let message = "Are you sure you want to reset this setting to its default value?";
+
+        cx.spawn(async move |this, cx: &mut AsyncApp| {
+            let confirmed = termy_native_sdk::confirm(title, message);
+            if !confirmed {
+                return;
+            }
+
+            let _ = cx.update(|cx| {
+                this.update(cx, |view, cx| {
+                    view.reset_setting_to_default(setting_key, cx);
+                })
+            });
+        })
+        .detach();
+    }
+
     pub(super) fn reset_section_to_defaults(
         &mut self,
         section: SettingsSection,

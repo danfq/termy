@@ -2012,7 +2012,7 @@ impl TerminalView {
         }
 
         #[cfg(target_os = "macos")]
-        {
+        if config.auto_update {
             let updater = cx.new(|_| AutoUpdater::new(crate::APP_VERSION));
             cx.observe(&updater, |view, updater, cx| {
                 let state = updater.read(cx).state.clone();

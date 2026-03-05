@@ -578,6 +578,24 @@ impl SettingsWindow {
                         cx,
                     )),
             )
+            .child(div().flex_1())
+            .child(self.render_sidebar_footer(cx))
+    }
+
+    pub(super) fn render_sidebar_footer(&self, _cx: &mut Context<Self>) -> impl IntoElement {
+        let text_muted = self.text_muted();
+        let border_color = self.border_color();
+        div()
+            .border_t_1()
+            .border_color(border_color)
+            .px_4()
+            .py_3()
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(text_muted)
+                    .child(format!("Termy v{}", crate::APP_VERSION)),
+            )
     }
 
     pub(super) fn search_input_content(

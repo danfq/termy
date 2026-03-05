@@ -13,6 +13,15 @@ Termy keybindings use Ghostty-style trigger overrides via repeated `keybind` lin
 - `secondary-p` -> `toggle_command_palette`
 - `secondary-t` -> `new_tab`
 - `secondary-w` -> `close_pane_or_tab`
+- `secondary-1` -> `switch_to_tab_1`
+- `secondary-2` -> `switch_to_tab_2`
+- `secondary-3` -> `switch_to_tab_3`
+- `secondary-4` -> `switch_to_tab_4`
+- `secondary-5` -> `switch_to_tab_5`
+- `secondary-6` -> `switch_to_tab_6`
+- `secondary-7` -> `switch_to_tab_7`
+- `secondary-8` -> `switch_to_tab_8`
+- `secondary-9` -> `switch_to_tab_9`
 - `secondary-d` -> `split_pane_vertical`
 - `secondary-shift-d` -> `split_pane_horizontal`
 - `secondary-o` -> `focus_pane_next`
@@ -44,6 +53,15 @@ Termy keybindings use Ghostty-style trigger overrides via repeated `keybind` lin
 - `secondary-p` -> `toggle_command_palette`
 - `secondary-t` -> `new_tab`
 - `secondary-w` -> `close_pane_or_tab`
+- `secondary-1` -> `switch_to_tab_1`
+- `secondary-2` -> `switch_to_tab_2`
+- `secondary-3` -> `switch_to_tab_3`
+- `secondary-4` -> `switch_to_tab_4`
+- `secondary-5` -> `switch_to_tab_5`
+- `secondary-6` -> `switch_to_tab_6`
+- `secondary-7` -> `switch_to_tab_7`
+- `secondary-8` -> `switch_to_tab_8`
+- `secondary-9` -> `switch_to_tab_9`
 - `secondary-d` -> `split_pane_vertical`
 - `secondary-shift-d` -> `split_pane_horizontal`
 - `secondary-o` -> `focus_pane_next`
@@ -74,6 +92,15 @@ Termy keybindings use Ghostty-style trigger overrides via repeated `keybind` lin
 - `secondary-p` -> `toggle_command_palette`
 - `secondary-t` -> `new_tab`
 - `secondary-w` -> `close_pane_or_tab`
+- `secondary-1` -> `switch_to_tab_1`
+- `secondary-2` -> `switch_to_tab_2`
+- `secondary-3` -> `switch_to_tab_3`
+- `secondary-4` -> `switch_to_tab_4`
+- `secondary-5` -> `switch_to_tab_5`
+- `secondary-6` -> `switch_to_tab_6`
+- `secondary-7` -> `switch_to_tab_7`
+- `secondary-8` -> `switch_to_tab_8`
+- `secondary-9` -> `switch_to_tab_9`
 - `secondary-d` -> `split_pane_vertical`
 - `secondary-shift-d` -> `split_pane_horizontal`
 - `secondary-o` -> `focus_pane_next`
@@ -104,6 +131,15 @@ Termy keybindings use Ghostty-style trigger overrides via repeated `keybind` lin
 - `secondary-p` -> `toggle_command_palette`
 - `secondary-t` -> `new_tab`
 - `secondary-w` -> `close_pane_or_tab`
+- `secondary-1` -> `switch_to_tab_1`
+- `secondary-2` -> `switch_to_tab_2`
+- `secondary-3` -> `switch_to_tab_3`
+- `secondary-4` -> `switch_to_tab_4`
+- `secondary-5` -> `switch_to_tab_5`
+- `secondary-6` -> `switch_to_tab_6`
+- `secondary-7` -> `switch_to_tab_7`
+- `secondary-8` -> `switch_to_tab_8`
+- `secondary-9` -> `switch_to_tab_9`
 - `secondary-d` -> `split_pane_vertical`
 - `secondary-shift-d` -> `split_pane_horizontal`
 - `secondary-o` -> `focus_pane_next`
@@ -158,6 +194,15 @@ Related UI option:
 - `move_tab_right`
 - `switch_tab_left`
 - `switch_tab_right`
+- `switch_to_tab_1`
+- `switch_to_tab_2`
+- `switch_to_tab_3`
+- `switch_to_tab_4`
+- `switch_to_tab_5`
+- `switch_to_tab_6`
+- `switch_to_tab_7`
+- `switch_to_tab_8`
+- `switch_to_tab_9`
 - `manage_tmux_sessions`
 - `split_pane_vertical`
 - `split_pane_horizontal`
