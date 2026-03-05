@@ -44,7 +44,8 @@ export function ActivityChart({ weeks }: ActivityChartProps): JSX.Element {
           />
           <Bar
             dataKey="commits"
-            fill="hsl(var(--primary) / 0.4)"
+            fill="hsl(var(--primary))"
+            fillOpacity={0.5}
             radius={[2, 2, 0, 0]}
             name="commits"
           />

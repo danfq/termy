@@ -17,7 +17,7 @@ export interface ContributorAuthor {
 export interface Contributor {
   total: number;
   weeks: ContributorWeek[];
-  author: ContributorAuthor;
+  author: ContributorAuthor | null;
 }
 
 async function fetchContributors(): Promise<Contributor[]> {
@@ -27,7 +27,8 @@ async function fetchContributors(): Promise<Contributor[]> {
     throw new Error(`Failed to load contributors (${res.status})`);
   }
 
-  return res.json();
+  const contributors: Contributor[] = await res.json();
+  return contributors.filter((c) => c.author !== null);
 }
 
 const CONTRIBUTORS_STALE_TIME = 5 * 60_000;
