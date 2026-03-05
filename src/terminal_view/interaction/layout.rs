@@ -11,6 +11,14 @@ impl TerminalView {
     }
 
     fn compute_terminal_rows(terminal_height: f32, cell_height: f32) -> u16 {
+        debug_assert!(
+            cell_height > 0.0,
+            "compute_terminal_rows: cell_height must be > 0"
+        );
+        debug_assert!(
+            terminal_height >= 0.0,
+            "compute_terminal_rows: terminal_height must be >= 0"
+        );
         // Always floor rows to avoid over-allocation that clips bottom status/help lines in TUIs.
         (terminal_height / cell_height).floor().max(1.0) as u16
     }
@@ -358,5 +366,7 @@ mod tests {
     fn compute_terminal_cols_preserves_edge_to_edge_ceil_behavior() {
         assert_eq!(TerminalView::compute_terminal_cols(30.1, 10.0, true), 4);
         assert_eq!(TerminalView::compute_terminal_cols(30.1, 10.0, false), 3);
+        assert_eq!(TerminalView::compute_terminal_cols(0.1, 10.0, true), 2);
+        assert_eq!(TerminalView::compute_terminal_cols(0.1, 10.0, false), 2);
     }
 }
