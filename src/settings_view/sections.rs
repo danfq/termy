@@ -2,7 +2,6 @@ use super::search::SettingMetadata;
 use super::*;
 use std::collections::HashSet;
 use std::sync::{LazyLock, Mutex};
-use termy_plugin_core::{PluginCapability, PluginPermission};
 
 const FALLBACK_SETTING_METADATA: SettingMetadata = SettingMetadata {
     key: "__missing_setting_metadata__",
@@ -479,134 +478,158 @@ impl SettingsWindow {
             .as_ref()
             .map(|path| path.display().to_string())
             .unwrap_or_else(|| "plugin directory unavailable".to_string());
+        let installed_count = self.plugin_inventory.len();
+        let running_count = self
+            .plugin_inventory
+            .iter()
+            .filter(|plugin| plugin.is_running)
+            .count();
+        let failed_count = self
+            .plugin_inventory
+            .iter()
+            .filter(|plugin| plugin.load_error.is_some())
+            .count();
 
-        let host_rows = vec![
-            div()
-                .py_4()
-                .px_4()
-                .bg(bg_card)
-                .border_1()
-                .border_color(border_color)
-                .flex()
-                .flex_col()
-                .gap_3()
-                .child(
-                    div()
-                        .text_sm()
-                        .font_weight(gpui::FontWeight::MEDIUM)
-                        .text_color(text_primary)
-                        .child("Plugin Directory"),
-                )
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(text_muted)
-                        .line_height(px(17.0))
-                        .child("Each plugin lives in its own folder with a `termy-plugin.json` manifest."),
-                )
-                .child(div().text_xs().text_color(text_secondary).child(plugin_directory))
-                .child(
-                    div()
-                        .flex()
-                        .gap_2()
-                        .child(
-                            div()
-                                .id("plugins-reload-btn")
-                                .px_4()
-                                .py_2()
-                                .rounded(px(0.0))
-                                .bg(accent)
-                                .text_sm()
-                                .font_weight(gpui::FontWeight::MEDIUM)
-                                .text_color(button_text)
-                                .cursor_pointer()
-                                .hover(move |s| s.bg(accent_hover).text_color(button_hover_text))
-                                .child("Reload")
-                                .on_click(cx.listener(|view, _, _, cx| {
-                                    view.refresh_plugin_inventory();
-                                    if let Some(error) = view.plugin_inventory_error.clone() {
-                                        termy_toast::error(error);
-                                    } else {
-                                        termy_toast::success("Reloaded plugin inventory");
-                                    }
-                                    cx.notify();
-                                })),
-                        )
-                        .child(
-                            div()
-                                .id("plugins-open-directory-btn")
-                                .px_4()
-                                .py_2()
-                                .rounded(px(0.0))
-                                .bg(bg_input)
-                                .border_1()
-                                .border_color(border_color)
-                                .text_sm()
-                                .font_weight(gpui::FontWeight::MEDIUM)
-                                .text_color(text_secondary)
-                                .cursor_pointer()
-                                .hover(move |s| s.bg(hover_bg).text_color(text_primary))
-                                .child("Open Folder")
-                                .on_click(cx.listener(|view, _, _, cx| {
-                                    if let Some(path) = view.plugin_directory.clone() {
-                                        if let Err(error) = SettingsWindow::open_path(&path) {
-                                            termy_toast::error(error);
-                                        }
-                                    } else if let Some(error) = view.plugin_inventory_error.clone() {
-                                        termy_toast::error(error);
-                                    } else {
-                                        termy_toast::error("Plugin directory unavailable");
-                                    }
-                                    cx.notify();
-                                })),
-                        ),
-                )
-                .child(
-                    div()
-                        .id("plugins-install-directory-btn")
-                        .w(px(150.0))
-                        .px_4()
-                        .py_2()
-                        .rounded(px(0.0))
-                        .bg(bg_input)
-                        .border_1()
-                        .border_color(border_color)
-                        .text_sm()
-                        .font_weight(gpui::FontWeight::MEDIUM)
-                        .text_color(text_secondary)
-                        .cursor_pointer()
-                        .hover(move |s| s.bg(hover_bg).text_color(text_primary))
-                        .child("Install From Folder")
-                        .on_click(cx.listener(|view, _, _, cx| {
-                            let plugin_root = view.plugin_directory.clone();
-                            cx.spawn(async move |this, cx: &mut AsyncApp| {
-                                let mut dialog = rfd::AsyncFileDialog::new().set_title("Install Plugin From Folder");
-                                if let Some(path) = plugin_root {
-                                    dialog = dialog.set_directory(path);
+        let host_rows = vec![div()
+            .py_4()
+            .px_4()
+            .bg(bg_card)
+            .border_1()
+            .border_color(border_color)
+            .flex()
+            .flex_col()
+            .gap_3()
+            .child(
+                div()
+                    .text_sm()
+                    .font_weight(gpui::FontWeight::MEDIUM)
+                    .text_color(text_primary)
+                    .child(format!(
+                        "{installed_count} installed, {running_count} running, {failed_count} failed"
+                    )),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(text_muted)
+                    .line_height(px(17.0))
+                    .child("Plugin directory"),
+            )
+            .child(
+                div()
+                    .px_3()
+                    .py_2()
+                    .bg(bg_input)
+                    .border_1()
+                    .border_color(border_color)
+                    .text_xs()
+                    .text_color(text_secondary)
+                    .line_height(px(17.0))
+                    .child(plugin_directory),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .gap_2()
+                    .child(
+                        div()
+                            .id("plugins-reload-btn")
+                            .px_4()
+                            .py_2()
+                            .rounded(px(0.0))
+                            .bg(accent)
+                            .text_sm()
+                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .text_color(button_text)
+                            .cursor_pointer()
+                            .hover(move |s| s.bg(accent_hover).text_color(button_hover_text))
+                            .child("Reload")
+                            .on_click(cx.listener(|view, _, _, cx| {
+                                view.refresh_plugin_inventory();
+                                if let Some(error) = view.plugin_inventory_error.clone() {
+                                    termy_toast::error(error);
+                                } else {
+                                    termy_toast::success("Reloaded plugin inventory");
                                 }
-                                let folder = dialog.pick_folder().await;
-                                let Some(folder) = folder else {
-                                    return;
-                                };
-                                let result = crate::plugins::install_plugin_from_folder(folder.path());
-                                let _ = cx.update(|cx| {
-                                    this.update(cx, |view, cx| {
-                                        match result {
-                                            Ok(message) => {
-                                                view.refresh_plugin_inventory();
-                                                termy_toast::success(message);
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        div()
+                            .id("plugins-open-directory-btn")
+                            .px_4()
+                            .py_2()
+                            .rounded(px(0.0))
+                            .bg(bg_input)
+                            .border_1()
+                            .border_color(border_color)
+                            .text_sm()
+                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .text_color(text_secondary)
+                            .cursor_pointer()
+                            .hover(move |s| s.bg(hover_bg).text_color(text_primary))
+                            .child("Open Folder")
+                            .on_click(cx.listener(|view, _, _, cx| {
+                                if let Some(path) = view.plugin_directory.clone() {
+                                    if let Err(error) = SettingsWindow::open_path(&path) {
+                                        termy_toast::error(error);
+                                    }
+                                } else if let Some(error) = view.plugin_inventory_error.clone() {
+                                    termy_toast::error(error);
+                                } else {
+                                    termy_toast::error("Plugin directory unavailable");
+                                }
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        div()
+                            .id("plugins-install-directory-btn")
+                            .px_4()
+                            .py_2()
+                            .rounded(px(0.0))
+                            .bg(self.accent_with_alpha(0.16))
+                            .border_1()
+                            .border_color(self.accent_with_alpha(0.4))
+                            .text_sm()
+                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .text_color(accent)
+                            .cursor_pointer()
+                            .hover(move |s| s.bg(hover_bg).text_color(text_primary))
+                            .child("Install From Folder")
+                            .on_click(cx.listener(|view, _, _, cx| {
+                                let plugin_root = view.plugin_directory.clone();
+                                cx.spawn(async move |this, cx: &mut AsyncApp| {
+                                    let mut dialog = rfd::AsyncFileDialog::new()
+                                        .set_title("Install Plugin From Folder");
+                                    if let Some(path) = plugin_root {
+                                        dialog = dialog.set_directory(path);
+                                    }
+                                    let folder = dialog.pick_folder().await;
+                                    let Some(folder) = folder else {
+                                        return;
+                                    };
+                                    let result =
+                                        crate::plugins::install_plugin_from_folder(folder.path());
+                                    let _ = cx.update(|cx| {
+                                        this.update(cx, |view, cx| {
+                                            match result {
+                                                Ok(message) => {
+                                                    view.refresh_plugin_inventory();
+                                                    termy_toast::success(message);
+                                                }
+                                                Err(error) => termy_toast::error(error),
                                             }
-                                            Err(error) => termy_toast::error(error),
-                                        }
-                                        cx.notify();
-                                    })
-                                });
-                            })
-                            .detach();
-                        })),
-                )
-                .into_any_element(),
-        ];
+                                            cx.notify();
+                                        })
+                                    });
+                                })
+                                .detach();
+                            })),
+                    ),
+            )
+            .into_any_element()];
 
         let plugin_rows: Vec<AnyElement> = if let Some(error) = self.plugin_inventory_error.clone()
         {
@@ -637,11 +660,14 @@ impl SettingsWindow {
         } else if self.plugin_inventory.is_empty() {
             vec![
                 div()
-                    .py_4()
-                    .px_4()
+                    .py_5()
+                    .px_5()
                     .bg(bg_card)
                     .border_1()
                     .border_color(border_color)
+                    .flex()
+                    .flex_col()
+                    .gap_3()
                     .child(
                         div()
                             .text_sm()
@@ -656,7 +682,57 @@ impl SettingsWindow {
                             .text_color(text_muted)
                             .line_height(px(17.0))
                             .child(
-                                "Drop a plugin into the plugin directory, then reload this page.",
+                                "Install from folder or drop a plugin into the plugin directory, then reload.",
+                            ),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .child(
+                                div()
+                                    .id("plugins-empty-install-directory-btn")
+                                    .px_4()
+                                    .py_2()
+                                    .rounded(px(0.0))
+                                    .bg(self.accent_with_alpha(0.16))
+                                    .border_1()
+                                    .border_color(self.accent_with_alpha(0.4))
+                                    .text_sm()
+                                    .font_weight(gpui::FontWeight::MEDIUM)
+                                    .text_color(accent)
+                                    .cursor_pointer()
+                                    .hover(move |s| s.bg(hover_bg).text_color(text_primary))
+                                    .child("Install From Folder")
+                                    .on_click(cx.listener(|view, _, _, cx| {
+                                        let plugin_root = view.plugin_directory.clone();
+                                        cx.spawn(async move |this, cx: &mut AsyncApp| {
+                                            let mut dialog = rfd::AsyncFileDialog::new()
+                                                .set_title("Install Plugin From Folder");
+                                            if let Some(path) = plugin_root {
+                                                dialog = dialog.set_directory(path);
+                                            }
+                                            let folder = dialog.pick_folder().await;
+                                            let Some(folder) = folder else {
+                                                return;
+                                            };
+                                            let result = crate::plugins::install_plugin_from_folder(
+                                                folder.path(),
+                                            );
+                                            let _ = cx.update(|cx| {
+                                                this.update(cx, |view, cx| {
+                                                    match result {
+                                                        Ok(message) => {
+                                                            view.refresh_plugin_inventory();
+                                                            termy_toast::success(message);
+                                                        }
+                                                        Err(error) => termy_toast::error(error),
+                                                    }
+                                                    cx.notify();
+                                                })
+                                            });
+                                        })
+                                        .detach();
+                                    })),
                             ),
                     )
                     .into_any_element(),
@@ -674,13 +750,13 @@ impl SettingsWindow {
             .flex_col()
             .gap_2()
             .child(self.render_section_header(
-                "Plugins",
+                "Plugins [Experimental]",
                 "Inspect installed plugins and manage startup behavior",
                 SettingsSection::Plugins,
                 cx,
             ))
-            .child(self.render_settings_group("PLUGIN HOST", host_rows))
-            .child(self.render_settings_group("INSTALLED PLUGINS", plugin_rows))
+            .child(self.render_settings_group("OVERVIEW", host_rows))
+            .child(self.render_settings_group("PLUGINS", plugin_rows))
     }
 
     pub(super) fn render_tabs_title_group(&mut self, cx: &mut Context<Self>) -> AnyElement {
@@ -1247,39 +1323,13 @@ impl SettingsWindow {
         };
         let bg_input = self.bg_input();
         let hover_bg = self.bg_hover();
+        let accent = self.accent();
         let text_primary = self.text_primary();
         let text_secondary = self.text_secondary();
         let text_muted = self.text_muted();
-        let permissions = if plugin.permissions.is_empty() {
-            "none".to_string()
-        } else {
-            plugin
-                .permissions
-                .iter()
-                .map(Self::plugin_permission_label)
-                .collect::<Vec<_>>()
-                .join(", ")
-        };
-        let capabilities = if plugin.capabilities.is_empty() {
-            "none reported".to_string()
-        } else {
-            plugin
-                .capabilities
-                .iter()
-                .map(Self::plugin_capability_label)
-                .collect::<Vec<_>>()
-                .join(", ")
-        };
-        let commands = if plugin.commands.is_empty() {
-            "none".to_string()
-        } else {
-            plugin
-                .commands
-                .iter()
-                .map(|command| format!("{} ({})", command.title, command.id))
-                .collect::<Vec<_>>()
-                .join(", ")
-        };
+        let commands_count = plugin.commands.len();
+        let permissions_count = plugin.permissions.len();
+        let capabilities_count = plugin.capabilities.len();
         let description = plugin
             .description
             .clone()
@@ -1303,12 +1353,54 @@ impl SettingsWindow {
         let plugin_id_for_run = plugin.id.clone();
         let plugin_id_for_remove = plugin.id.clone();
         let plugin_root = plugin.root_dir.clone();
+        let plugin_name = plugin.name.clone();
         let next_autostart = !plugin.autostart;
         let logs = if plugin.recent_logs.is_empty() {
-            "No runtime logs yet.".to_string()
+            None
         } else {
-            plugin.recent_logs.join("\n")
+            Some(
+                plugin
+                    .recent_logs
+                    .iter()
+                    .rev()
+                    .take(3)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev()
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            )
         };
+        let logs_dialog_text = plugin.recent_logs.join("\n");
+        let run_fill = if plugin.is_running {
+            self.accent_with_alpha(0.22)
+        } else {
+            accent
+        };
+        let run_border = if plugin.is_running {
+            self.accent_with_alpha(0.4)
+        } else {
+            self.accent_with_alpha(0.5)
+        };
+        let run_text = self.contrasting_text_for_fill(run_fill, bg_card);
+        let autostart_fill = if plugin.autostart {
+            self.accent_with_alpha(0.18)
+        } else {
+            bg_input
+        };
+        let autostart_border = if plugin.autostart {
+            self.accent_with_alpha(0.42)
+        } else {
+            self.border_color()
+        };
+        let autostart_text = if plugin.autostart {
+            accent
+        } else {
+            text_secondary
+        };
+        let remove_fill = self.accent_with_alpha(0.12);
+        let remove_border = self.accent_with_alpha(0.45);
 
         div()
             .py_4()
@@ -1354,12 +1446,18 @@ impl SettingsWindow {
                         div()
                             .text_xs()
                             .font_weight(gpui::FontWeight::SEMIBOLD)
-                            .text_color(if plugin.is_running {
-                                self.accent()
+                            .text_color(if plugin.load_error.is_some() || plugin.is_running {
+                                accent
                             } else {
                                 text_muted
                             })
-                            .child(if plugin.is_running { "RUNNING" } else { "IDLE" }),
+                            .child(if plugin.load_error.is_some() {
+                                "FAILED"
+                            } else if plugin.is_running {
+                                "RUNNING"
+                            } else {
+                                "IDLE"
+                            }),
                     ),
             )
             .child(div().text_xs().text_color(text_secondary).child(status))
@@ -1381,48 +1479,15 @@ impl SettingsWindow {
                     .text_xs()
                     .text_color(text_muted)
                     .line_height(px(17.0))
-                    .child(format!("Permissions: {permissions}")),
-            )
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(text_muted)
-                    .line_height(px(17.0))
-                    .child(format!("Capabilities: {capabilities}")),
-            )
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(text_muted)
-                    .line_height(px(17.0))
-                    .child(format!("Commands: {commands}")),
-            )
-            .child(
-                div()
-                    .py_3()
-                    .px_3()
-                    .bg(bg_input)
-                    .border_1()
-                    .border_color(self.border_color())
-                    .child(
-                        div()
-                            .text_xs()
-                            .font_weight(gpui::FontWeight::SEMIBOLD)
-                            .text_color(text_primary)
-                            .child("Recent Logs"),
-                    )
-                    .child(
-                        div()
-                            .mt_2()
-                            .text_xs()
-                            .text_color(text_muted)
-                            .line_height(px(17.0))
-                            .child(logs),
-                    ),
+                    .child(format!(
+                        "{} command(s), {} permission(s), {} capability(s)",
+                        commands_count, permissions_count, capabilities_count
+                    )),
             )
             .child(
                 div()
                     .flex()
+                    .flex_wrap()
                     .gap_2()
                     .child(
                         div()
@@ -1430,14 +1495,14 @@ impl SettingsWindow {
                             .px_3()
                             .py_2()
                             .rounded(px(0.0))
-                            .bg(bg_input)
+                            .bg(run_fill)
                             .border_1()
-                            .border_color(self.border_color())
+                            .border_color(run_border)
                             .text_xs()
                             .font_weight(gpui::FontWeight::MEDIUM)
-                            .text_color(text_secondary)
+                            .text_color(run_text)
                             .cursor_pointer()
-                            .hover(move |s| s.bg(hover_bg).text_color(text_primary))
+                            .hover(move |s| s.bg(hover_bg))
                             .child(run_label)
                             .on_click(cx.listener(move |view, _, _, cx| {
                                 let result = if plugin.is_running {
@@ -1461,14 +1526,14 @@ impl SettingsWindow {
                             .px_3()
                             .py_2()
                             .rounded(px(0.0))
-                            .bg(bg_input)
+                            .bg(autostart_fill)
                             .border_1()
-                            .border_color(self.border_color())
+                            .border_color(autostart_border)
                             .text_xs()
                             .font_weight(gpui::FontWeight::MEDIUM)
-                            .text_color(text_secondary)
+                            .text_color(autostart_text)
                             .cursor_pointer()
-                            .hover(move |s| s.bg(hover_bg).text_color(text_primary))
+                            .hover(move |s| s.bg(hover_bg))
                             .child(autostart_label)
                             .on_click(cx.listener(move |view, _, _, cx| {
                                 match crate::plugins::set_plugin_autostart(
@@ -1508,16 +1573,54 @@ impl SettingsWindow {
                     )
                     .child(
                         div()
+                            .id(SharedString::from(format!("plugin-logs-{}", plugin.id)))
+                            .px_3()
+                            .py_2()
+                            .rounded(px(0.0))
+                            .bg(if logs.is_some() {
+                                self.accent_with_alpha(0.16)
+                            } else {
+                                bg_input
+                            })
+                            .border_1()
+                            .border_color(if logs.is_some() {
+                                self.accent_with_alpha(0.35)
+                            } else {
+                                self.border_color()
+                            })
+                            .text_xs()
+                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .text_color(if logs.is_some() { accent } else { text_secondary })
+                            .cursor_pointer()
+                            .hover(move |s| s.bg(hover_bg).text_color(text_primary))
+                            .child("View Logs")
+                            .on_click(cx.listener(move |_view, _, _, cx| {
+                                if logs_dialog_text.is_empty() {
+                                    termy_toast::info("No runtime logs yet.");
+                                    return;
+                                }
+                                let title = format!("{} Logs", plugin_name);
+                                let body = logs_dialog_text.clone();
+                                // Native modal dialogs can re-enter event loops; run them
+                                // out-of-band from the current GPUI mutable update.
+                                cx.spawn(async move |_this, _cx: &mut AsyncApp| {
+                                    termy_native_sdk::show_alert(&title, &body);
+                                })
+                                .detach();
+                            })),
+                    )
+                    .child(
+                        div()
                             .id(SharedString::from(format!("plugin-remove-{}", plugin.id)))
                             .px_3()
                             .py_2()
                             .rounded(px(0.0))
-                            .bg(bg_input)
+                            .bg(remove_fill)
                             .border_1()
-                            .border_color(self.border_color())
+                            .border_color(remove_border)
                             .text_xs()
                             .font_weight(gpui::FontWeight::MEDIUM)
-                            .text_color(text_secondary)
+                            .text_color(accent)
                             .cursor_pointer()
                             .hover(move |s| s.bg(hover_bg).text_color(text_primary))
                             .child("Remove")
@@ -1553,28 +1656,6 @@ impl SettingsWindow {
                     ),
             )
             .into_any_element()
-    }
-
-    fn plugin_permission_label(permission: &PluginPermission) -> &'static str {
-        match permission {
-            PluginPermission::FilesystemRead => "filesystem_read",
-            PluginPermission::FilesystemWrite => "filesystem_write",
-            PluginPermission::Network => "network",
-            PluginPermission::Shell => "shell",
-            PluginPermission::Clipboard => "clipboard",
-            PluginPermission::Notifications => "notifications",
-            PluginPermission::TerminalRead => "terminal_read",
-            PluginPermission::TerminalWrite => "terminal_write",
-            PluginPermission::UiPanels => "ui_panels",
-        }
-    }
-
-    fn plugin_capability_label(capability: &PluginCapability) -> &'static str {
-        match capability {
-            PluginCapability::CommandProvider => "command_provider",
-            PluginCapability::EventSubscriber => "event_subscriber",
-            PluginCapability::UiPanel => "ui_panel",
-        }
     }
 
     pub(super) fn render_advanced_section(&mut self, cx: &mut Context<Self>) -> impl IntoElement {

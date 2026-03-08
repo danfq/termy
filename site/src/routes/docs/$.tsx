@@ -1,13 +1,20 @@
 import { createFileRoute, Link, notFound } from "@tanstack/react-router";
 import { ChevronLeft, ChevronRight } from "lucide-react";
+import rehypeHighlight from "rehype-highlight";
 import { useMemo, type JSX, type ReactNode } from "react";
 import Markdown from "react-markdown";
 import type { Components } from "react-markdown";
+import { CopyButton } from "@/components/animate-ui/components/buttons/copy";
 import { Sidebar } from "@/components/docs/Sidebar";
 import { TableOfContents } from "@/components/docs/TableOfContents";
 import { Button } from "@/components/ui/button";
 import { validateSearch, useDocSearchChange } from "@/hooks/useDocSearch";
-import { extractHeadings, getAllDocs, getDocBySlug, type Doc } from "@/lib/docs";
+import {
+  extractHeadings,
+  getAllDocs,
+  getDocBySlug,
+  type Doc,
+} from "@/lib/docs";
 import { generateSlug, proseClasses } from "@/lib/utils";
 
 export const Route = createFileRoute("/docs/$")({
@@ -38,7 +45,8 @@ function getAdjacentDocs(currentSlug: string, docs: Doc[]): AdjacentDocs {
   }
 
   const prevDoc = currentIndex > 0 ? docs[currentIndex - 1] : null;
-  const nextDoc = currentIndex < docs.length - 1 ? docs[currentIndex + 1] : null;
+  const nextDoc =
+    currentIndex < docs.length - 1 ? docs[currentIndex + 1] : null;
 
   return { prevDoc, nextDoc };
 }
@@ -66,14 +74,20 @@ function highlightText(text: string, query: string): ReactNode {
     }
 
     return (
-      <mark key={index} className="bg-primary/30 text-foreground rounded px-0.5">
+      <mark
+        key={index}
+        className="bg-primary/30 text-foreground rounded px-0.5"
+      >
         {part}
       </mark>
     );
   });
 }
 
-function wrapHighlightedChildren(children: ReactNode, query: string): ReactNode {
+function wrapHighlightedChildren(
+  children: ReactNode,
+  query: string,
+): ReactNode {
   if (!query.trim()) {
     return children;
   }
@@ -95,7 +109,11 @@ function wrapHighlightedChildren(children: ReactNode, query: string): ReactNode 
   return children;
 }
 
-function renderHeading(tagName: "h2" | "h3" | "h4", children: ReactNode, query: string): JSX.Element {
+function renderHeading(
+  tagName: "h2" | "h3" | "h4",
+  children: ReactNode,
+  query: string,
+): JSX.Element {
   const id = generateSlug(String(children));
   const content = wrapHighlightedChildren(children, query);
 
@@ -129,8 +147,42 @@ function createMarkdownComponents(query: string): Components {
     h4: ({ children }) => renderHeading("h4", children, query),
     p: ({ children }) => <p>{wrapHighlightedChildren(children, query)}</p>,
     li: ({ children }) => <li>{wrapHighlightedChildren(children, query)}</li>,
-    strong: ({ children }) => <strong>{wrapHighlightedChildren(children, query)}</strong>,
+    strong: ({ children }) => (
+      <strong>{wrapHighlightedChildren(children, query)}</strong>
+    ),
     em: ({ children }) => <em>{wrapHighlightedChildren(children, query)}</em>,
+    pre: ({ children }) => {
+      let content = "";
+      if (
+        children &&
+        typeof children === "object" &&
+        "props" in children &&
+        children.props &&
+        typeof children.props === "object" &&
+        "children" in children.props
+      ) {
+        const codeChildren = children.props.children;
+        if (typeof codeChildren === "string") {
+          content = codeChildren;
+        } else if (Array.isArray(codeChildren)) {
+          content = codeChildren.join("");
+        }
+      }
+
+      return (
+        <div className="relative group">
+          <CopyButton
+            content={content.replace(/\n$/, "")}
+            variant="outline"
+            size="xs"
+            className="absolute right-2 top-2 z-10 opacity-0 transition-opacity group-hover:opacity-100"
+            aria-label="Copy code"
+            title="Copy code"
+          />
+          <pre>{children}</pre>
+        </div>
+      );
+    },
   };
 }
 
@@ -227,7 +279,9 @@ function DocPage(): JSX.Element {
 
           <div className="mb-8">
             {doc.category && (
-              <span className="text-sm text-primary font-medium">{doc.category}</span>
+              <span className="text-sm text-primary font-medium">
+                {doc.category}
+              </span>
             )}
             <h1 className="text-3xl md:text-4xl font-bold mt-1">{doc.title}</h1>
             {doc.description && (
@@ -236,7 +290,12 @@ function DocPage(): JSX.Element {
           </div>
 
           <div className={`${proseClasses} prose-li:text-muted-foreground`}>
-            <Markdown components={markdownComponents}>{doc.content}</Markdown>
+            <Markdown
+              components={markdownComponents}
+              rehypePlugins={[rehypeHighlight]}
+            >
+              {doc.content}
+            </Markdown>
           </div>
 
           <div className="mt-12 pt-8 border-t border-border/50 flex flex-col sm:flex-row justify-between gap-4">

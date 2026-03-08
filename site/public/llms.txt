@@ -67,8 +67,213 @@ Use the Command Palette and run `Check for updates`.
 - Installation: `/docs/installation`
 - First Steps: `/docs/first-steps`
 - Customization Guide: `/docs/customization-guide`
+- Plugin System Overview: `/docs/plugins/overview`
+- Developing Plugins: `/docs/plugins/developing-plugins`
+- plugin_core Reference: `/docs/plugins/plugin-core`
+- plugin_host Reference: `/docs/plugins/plugin-host`
+- plugin_sdk (Rust) Reference: `/docs/plugins/plugin-sdk-rust`
+- ts-bindings Reference: `/docs/plugins/ts-bindings`
 - Troubleshooting: `/docs/troubleshooting`
 - FAQ: `/docs/faq`
+
+---
+
+## Plugins
+
+Termy supports local plugins via JSON manifest + stdio JSON-RPC protocol.
+
+### Plugin Directory
+
+- `~/.config/termy/plugins`
+- One plugin per folder
+- Required manifest file: `termy-plugin.json`
+
+### Settings UI
+
+In `Settings -> Plugins`, available actions include:
+
+- `Reload`
+- `Open Folder`
+- `Install From Folder`
+- Per-plugin controls:
+  - `Start/Stop`
+  - `Enable/Disable Autostart`
+  - `Open Folder`
+  - `View Logs`
+  - `Remove`
+
+### Manifest (plugin_core)
+
+Constants:
+
+- `PLUGIN_MANIFEST_FILE_NAME = "termy-plugin.json"`
+- `PLUGIN_PROTOCOL_VERSION = 1`
+
+Required manifest fields:
+
+- `schema_version` (must be `1`)
+- `id`
+- `name`
+- `version`
+- `entrypoint`
+
+Optional fields include:
+
+- `description`
+- `author`
+- `minimum_host_version`
+- `api_version`
+- `runtime` (`executable`)
+- `autostart` (defaults to `true`)
+- `permissions`
+- `contributes.commands`
+
+Permissions:
+
+- `filesystem_read`
+- `filesystem_write`
+- `network`
+- `shell`
+- `clipboard`
+- `notifications`
+- `terminal_read`
+- `terminal_write`
+- `ui_panels`
+
+Capabilities:
+
+- `command_provider`
+- `event_subscriber`
+- `ui_panel`
+
+### Wire Protocol
+
+Host -> Plugin:
+
+- `hello`
+- `invoke_command`
+- `shutdown`
+- `ping`
+
+Plugin -> Host:
+
+- `hello`
+- `log`
+- `toast`
+- `pong`
+
+### plugin_host API
+
+`PluginHost`:
+
+- `load_default(host_version)`
+- `load_from_dir(root_dir, host_version)`
+- `root_dir()`
+- `running_plugins()`
+- `failures()`
+- `recent_logs(plugin_id)`
+- `start_plugin(plugin_id)`
+- `stop_plugin(plugin_id)`
+- `invoke_command(plugin_id, command_id)`
+
+`RunningPlugin`:
+
+- `id()`
+- `name()`
+- `version()`
+- `root_dir()`
+- `permissions()`
+- `capabilities()`
+- `shutdown()`
+- `invoke_command(command_id)`
+
+`PluginLoadFailure`:
+
+- `plugin_id()`
+- `message()`
+
+Free functions:
+
+- `default_plugins_dir()`
+- `discover_plugins(root_dir)`
+
+### plugin_sdk (Rust) API
+
+Types:
+
+- `PluginMetadata`
+- `PluginSession<R, W>`
+- `PluginSessionError`
+
+`PluginMetadata`:
+
+- `new(plugin_id, name, version)`
+- `with_capabilities(capabilities)`
+
+`PluginSession`:
+
+- `stdio(metadata)` (for `Stdin/Stdout`)
+- `initialize(reader, writer, metadata)`
+- `host_hello()`
+- `plugin_id()`
+- `recv()`
+- `send(message)`
+- `send_log(level, message)`
+- `send_pong()`
+- `send_toast(level, message, duration_ms)`
+- `command_id(message)`
+- `run_until_shutdown(on_message)`
+
+`PluginSessionError` variants:
+
+- `Io`
+- `Json`
+- `HostClosedStream`
+- `ProtocolVersionMismatch`
+- `PluginIdMismatch`
+- `UnexpectedMessage`
+
+### ts-bindings API (`@termy-oss/ts-bindings`)
+
+Constants:
+
+- `PLUGIN_MANIFEST_FILE_NAME`
+- `PLUGIN_PROTOCOL_VERSION`
+
+Classes:
+
+- `PluginSessionError`
+- `HostClosedStreamError`
+- `ProtocolVersionMismatchError`
+- `PluginIdMismatchError`
+- `InvalidMessageError`
+- `UnexpectedMessageError`
+- `PluginSession`
+
+`PluginSession` static methods:
+
+- `PluginSession.stdio(metadata)`
+- `PluginSession.initialize(reader, writer, metadata)`
+- `PluginSession.commandId(message)`
+
+`PluginSession` instance members:
+
+- readonly `hostHello`
+- readonly `pluginId`
+- `recv()`
+- `send(message)`
+- `sendLog(level, message)`
+- `sendPong()`
+- `sendToast(level, message, durationMs?)`
+- `runUntilShutdown(onMessage)`
+
+Free functions:
+
+- `readHostHello(reader)`
+- `readHostMessage(reader)`
+- `parseHostRpcMessage(line)`
+- `parsePluginRpcMessage(line)`
+- `serializePluginRpcMessage(message)`
 
 ## Configuration
 

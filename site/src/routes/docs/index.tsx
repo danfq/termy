@@ -9,6 +9,7 @@ import { getDocsByCategory, sortDocCategories } from "@/lib/docs";
 const START_HERE_DOCS = [
   { slug: "installation", label: "Install Termy" },
   { slug: "first-steps", label: "First Steps" },
+  { slug: "plugins/overview", label: "Plugin System" },
   { slug: "troubleshooting", label: "Troubleshooting" },
 ] as const;
 
@@ -36,7 +37,12 @@ function DocsPage(): JSX.Element {
         {/* Main content */}
         <main className="flex-1 min-w-0">
           {/* Mobile back link */}
-          <Button asChild variant="ghost" size="sm" className="lg:hidden mb-6 text-muted-foreground hover:text-foreground">
+          <Button
+            asChild
+            variant="ghost"
+            size="sm"
+            className="lg:hidden mb-6 text-muted-foreground hover:text-foreground"
+          >
             <Link to="/">
               <ChevronLeft className="w-4 h-4" />
               Back to home
@@ -102,7 +108,7 @@ function DocsPage(): JSX.Element {
             <h2 className="text-lg font-semibold text-foreground mb-3">
               Start Here
             </h2>
-            <div className="grid gap-3 sm:grid-cols-3">
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
               {START_HERE_DOCS.map((doc) => (
                 <Link
                   key={doc.slug}

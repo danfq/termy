@@ -12,9 +12,10 @@
   font-weight: 100 700;
   font-display: swap;
   src: url("/fonts/outfit-latin.woff2") format("woff2");
-  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6,
-    U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122,
-    U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+  unicode-range:
+    U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC,
+    U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212,
+    U+2215, U+FEFF, U+FFFD;
 }
 
 @font-face {
@@ -23,10 +24,10 @@
   font-weight: 100 700;
   font-display: swap;
   src: url("/fonts/outfit-latin-ext.woff2") format("woff2");
-  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7,
-    U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F,
-    U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F,
-    U+A720-A7FF;
+  unicode-range:
+    U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304,
+    U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB,
+    U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
 }
 
 @theme {
@@ -261,6 +262,52 @@
   color: #5c6370;
 }
 
+/* Docs code highlighting */
+.prose pre code.hljs {
+  display: block;
+  background: transparent;
+  padding: 0;
+  border-radius: 0;
+  color: #d4d4d4;
+}
+
+.prose pre code .hljs-keyword,
+.prose pre code .hljs-selector-tag,
+.prose pre code .hljs-literal,
+.prose pre code .hljs-built_in {
+  color: #c586c0;
+}
+
+.prose pre code .hljs-title,
+.prose pre code .hljs-title.class_,
+.prose pre code .hljs-title.function_ {
+  color: #4ec9b0;
+}
+
+.prose pre code .hljs-string,
+.prose pre code .hljs-attr,
+.prose pre code .hljs-template-tag,
+.prose pre code .hljs-template-variable {
+  color: #ce9178;
+}
+
+.prose pre code .hljs-number,
+.prose pre code .hljs-symbol,
+.prose pre code .hljs-bullet {
+  color: #b5cea8;
+}
+
+.prose pre code .hljs-comment,
+.prose pre code .hljs-quote {
+  color: #6a9955;
+}
+
+.prose pre code .hljs-variable,
+.prose pre code .hljs-params,
+.prose pre code .hljs-property {
+  color: #9cdcfe;
+}
+
 .terminal-dots {
   @apply flex items-center gap-[7px];
 }
@@ -306,8 +353,14 @@
 
 /* Terminal cursor blink */
 @keyframes terminal-blink {
-  0%, 50% { opacity: 1; }
-  51%, 100% { opacity: 0; }
+  0%,
+  50% {
+    opacity: 1;
+  }
+  51%,
+  100% {
+    opacity: 0;
+  }
 }
 
 .animate-terminal-blink {

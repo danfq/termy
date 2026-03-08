@@ -1,4 +1,5 @@
-import { useMemo } from "react";
+import { ChevronDown, ChevronRight } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 import { Link } from "@tanstack/react-router";
 import { getDocsByCategory, getAllDocs, sortDocCategories } from "@/lib/docs";
 
@@ -8,9 +9,11 @@ interface SidebarProps {
   onSearchChange: (value: string) => void;
 }
 
+const SIDEBAR_EXPANDED_CATEGORIES_KEY = "termy.docs.sidebar.expandedCategories";
+
 export function Sidebar({ currentSlug, search, onSearchChange }: SidebarProps) {
-  const docsByCategory = getDocsByCategory();
-  const allDocs = getAllDocs();
+  const docsByCategory = useMemo(() => getDocsByCategory(), []);
+  const allDocs = useMemo(() => getAllDocs(), []);
 
   const filteredResults = useMemo(() => {
     if (!search.trim()) return null;
@@ -24,11 +27,68 @@ export function Sidebar({ currentSlug, search, onSearchChange }: SidebarProps) {
     );
   }, [search, allDocs]);
 
-  const categories = sortDocCategories(Object.keys(docsByCategory));
+  const categories = useMemo(
+    () => sortDocCategories(Object.keys(docsByCategory)),
+    [docsByCategory],
+  );
+  const [expandedCategories, setExpandedCategories] = useState<
+    Record<string, boolean>
+  >({});
+
+  useEffect(() => {
+    let saved: Record<string, boolean> = {};
+    try {
+      const raw = window.localStorage.getItem(SIDEBAR_EXPANDED_CATEGORIES_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw) as unknown;
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+          saved = Object.fromEntries(
+            Object.entries(parsed).filter(
+              (entry): entry is [string, boolean] =>
+                typeof entry[0] === "string" && typeof entry[1] === "boolean",
+            ),
+          );
+        }
+      }
+    } catch {
+      saved = {};
+    }
+    setExpandedCategories(saved);
+  }, []);
+
+  useEffect(() => {
+    setExpandedCategories((previous) => {
+      const next: Record<string, boolean> = { ...previous };
+      for (const category of categories) {
+        if (!(category in next)) {
+          next[category] = true;
+        }
+      }
+      return next;
+    });
+  }, [categories]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        SIDEBAR_EXPANDED_CATEGORIES_KEY,
+        JSON.stringify(expandedCategories),
+      );
+    } catch {
+      // Ignore storage write failures.
+    }
+  }, [expandedCategories]);
+
+  function toggleCategory(category: string): void {
+    setExpandedCategories((previous) => ({
+      ...previous,
+      [category]: !previous[category],
+    }));
+  }
 
   return (
     <aside className="hidden lg:block w-64 shrink-0">
-      <nav className="sticky top-24 pr-4">
+      <nav className="sticky top-24 max-h-[calc(100vh-7rem)] overflow-y-auto pr-3">
         {/* Search input */}
         <div className="relative mb-4">
           <svg
@@ -115,26 +175,37 @@ export function Sidebar({ currentSlug, search, onSearchChange }: SidebarProps) {
           <div className="space-y-6">
             {categories.map((category) => (
               <div key={category}>
-                <h4 className="text-sm font-semibold text-foreground mb-2">
-                  {category}
-                </h4>
-                <ul className="space-y-1">
-                  {docsByCategory[category].map((doc) => (
-                    <li key={doc.slug}>
-                      <Link
-                        to="/docs/$"
-                        params={{ _splat: doc.slug }}
-                        className={`block text-sm py-1.5 px-3 rounded-lg transition-colors ${
-                          currentSlug === doc.slug
-                            ? "bg-primary/10 text-primary font-medium"
-                            : "text-muted-foreground hover:text-foreground hover:bg-secondary/50"
-                        }`}
-                      >
-                        {doc.title}
-                      </Link>
-                    </li>
-                  ))}
-                </ul>
+                <button
+                  type="button"
+                  onClick={() => toggleCategory(category)}
+                  className="mb-2 flex w-full items-center justify-between rounded-md px-1 py-1 text-left text-sm font-semibold text-foreground hover:bg-secondary/50"
+                >
+                  <span>{category}</span>
+                  {expandedCategories[category] !== false ? (
+                    <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                  ) : (
+                    <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                  )}
+                </button>
+                {expandedCategories[category] !== false && (
+                  <ul className="space-y-1">
+                    {docsByCategory[category].map((doc) => (
+                      <li key={doc.slug}>
+                        <Link
+                          to="/docs/$"
+                          params={{ _splat: doc.slug }}
+                          className={`block text-sm py-1.5 px-3 rounded-lg transition-colors ${
+                            currentSlug === doc.slug
+                              ? "bg-primary/10 text-primary font-medium"
+                              : "text-muted-foreground hover:text-foreground hover:bg-secondary/50"
+                          }`}
+                        >
+                          {doc.title}
+                        </Link>
+                      </li>
+                    ))}
+                  </ul>
+                )}
               </div>
             ))}
           </div>
