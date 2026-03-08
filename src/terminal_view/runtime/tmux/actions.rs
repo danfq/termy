@@ -234,7 +234,11 @@ impl TerminalView {
         refreshed
     }
 
-    pub(in crate::terminal_view) fn tmux_add_tab(&mut self, cx: &mut Context<Self>) {
+    pub(in crate::terminal_view) fn tmux_add_tab(
+        &mut self,
+        working_dir: Option<&str>,
+        cx: &mut Context<Self>,
+    ) {
         let Some(active_window_id) = self
             .tabs
             .get(self.active_tab)
@@ -245,7 +249,7 @@ impl TerminalView {
         };
 
         if !self.run_tmux_action("Failed to create tab", |tmux_client| {
-            tmux_client.new_window_after(active_window_id.as_str())
+            tmux_client.new_window_after(active_window_id.as_str(), working_dir)
         }) {
             return;
         }

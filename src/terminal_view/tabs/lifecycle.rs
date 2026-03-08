@@ -235,15 +235,27 @@ impl TerminalView {
     }
 
     pub(crate) fn add_tab(&mut self, cx: &mut Context<Self>) {
+        self.add_tab_with_working_dir(None, cx);
+    }
+
+    pub(crate) fn add_tab_with_working_dir(
+        &mut self,
+        working_dir: Option<&str>,
+        cx: &mut Context<Self>,
+    ) {
         match self.runtime_kind() {
-            RuntimeKind::Tmux => self.tmux_add_tab(cx),
+            RuntimeKind::Tmux => self.tmux_add_tab(working_dir, cx),
             RuntimeKind::Native => {
                 // Tab creation should stay robust if active pane state is transiently missing.
                 let size = self
                     .active_terminal()
                     .map(|terminal| terminal.size())
                     .unwrap_or_default();
-                let preferred_working_dir = self.preferred_working_dir_for_new_native_session(cx);
+                let preferred_working_dir = working_dir
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(ToOwned::to_owned)
+                    .or_else(|| self.preferred_working_dir_for_new_native_session(cx));
                 let terminal = match Terminal::new_native(
                     size,
                     preferred_working_dir.as_deref(),

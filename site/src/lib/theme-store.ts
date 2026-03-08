@@ -30,6 +30,8 @@ export interface AuthUser {
   id: string;
   githubUserId: number;
   githubLogin: string;
+  avatarUrl: string | null;
+  name: string | null;
 }
 
 export interface ThemeWithVersionsResponse {

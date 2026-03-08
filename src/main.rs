@@ -16,7 +16,7 @@ mod theme_store;
 mod ui;
 
 use commands::{OpenConfig, OpenSettings};
-use deeplink::DeepLinkRoute;
+use deeplink::{AuthCallbackDeepLink, DeepLinkArgument, DeepLinkRoute};
 use flume::Receiver;
 use gpui::{App, Application, AsyncApp, Bounds, WindowBounds, WindowOptions, prelude::*, px, size};
 use startup::StartupBlocker;
@@ -230,18 +230,122 @@ fn start_theme_install_from_deeplink(cx: &mut App, slug: String) {
     .detach();
 }
 
+fn start_auth_callback_from_deeplink(cx: &mut App, payload: AuthCallbackDeepLink) {
+    let maybe_session = match (
+        payload.user_id.clone(),
+        payload.github_user_id,
+        payload.github_login.clone(),
+    ) {
+        (Some(id), Some(github_user_id), Some(github_login)) => {
+            Some(theme_store::ThemeStoreAuthSession {
+                session_token: payload.session_token.clone(),
+                user: theme_store::ThemeStoreAuthUser {
+                    id,
+                    github_user_id,
+                    github_login,
+                    avatar_url: payload.avatar_url.clone(),
+                    name: payload.name.clone(),
+                },
+            })
+        }
+        _ => None,
+    };
+
+    if let Some(session) = maybe_session.clone() {
+        if let Err(error) = theme_store::persist_auth_session(&session) {
+            log::error!("Failed to persist theme store auth session: {}", error);
+            termy_toast::error(error);
+        } else {
+            app_actions::update_open_settings_windows(cx, |view, settings_cx| {
+                view.apply_theme_store_auth_session(session.clone(), settings_cx);
+            });
+        }
+    }
+
+    let loading_id = termy_toast::loading("Signing in with GitHub...");
+    let api_base = theme_store::theme_store_api_base_url();
+    let session_token = payload.session_token.clone();
+
+    cx.spawn(async move |cx: &mut AsyncApp| {
+        let fetch_result = cx
+            .background_executor()
+            .spawn(async move {
+                theme_store::fetch_auth_user_blocking(&api_base, &session_token).map(|user| {
+                    theme_store::ThemeStoreAuthSession {
+                        session_token,
+                        user,
+                    }
+                })
+            })
+            .await;
+
+        termy_toast::dismiss_toast(loading_id);
+
+        cx.update(|cx| match fetch_result {
+            Ok(session) => {
+                if let Err(error) = theme_store::persist_auth_session(&session) {
+                    log::error!("Failed to persist theme store auth session: {}", error);
+                    termy_toast::error(error);
+                    return;
+                }
+
+                app_actions::update_open_settings_windows(cx, |view, settings_cx| {
+                    view.apply_theme_store_auth_session(session.clone(), settings_cx);
+                });
+                termy_toast::success(format!("Signed in as @{}", session.user.github_login));
+            }
+            Err(error) => {
+                log::error!("Failed to resolve theme store auth user: {}", error);
+                if let Err(clear_error) = theme_store::clear_auth_session() {
+                    log::error!(
+                        "Failed to clear theme store auth session after auth error: {}",
+                        clear_error
+                    );
+                }
+                app_actions::update_open_settings_windows(cx, |view, settings_cx| {
+                    view.clear_theme_store_auth_session(settings_cx);
+                });
+                termy_toast::error(error);
+            }
+        });
+    })
+    .detach();
+}
+
 fn dispatch_deeplink(
     cx: &mut App,
     route: DeepLinkRoute,
-    route_argument: Option<String>,
+    route_argument: Option<DeepLinkArgument>,
 ) -> Result<(), String> {
     match route {
         DeepLinkRoute::Activate => Ok(()),
-        DeepLinkRoute::NewTab => app_actions::open_new_tab_in_main_window(cx, route_argument),
+        DeepLinkRoute::NewTab => {
+            let (command, dir) = match route_argument {
+                Some(DeepLinkArgument::NewTab(payload)) => (payload.command, payload.dir),
+                Some(DeepLinkArgument::Value(_))
+                | Some(DeepLinkArgument::AuthCallback(_))
+                | None => (None, None),
+            };
+            app_actions::open_new_tab_in_main_window(cx, command, dir)
+        }
+        DeepLinkRoute::AuthCallback => {
+            let payload = route_argument
+                .and_then(|argument| match argument {
+                    DeepLinkArgument::AuthCallback(payload) => Some(payload),
+                    DeepLinkArgument::NewTab(_) | DeepLinkArgument::Value(_) => None,
+                })
+                .ok_or_else(|| "Auth callback deeplink requires a session payload".to_string())?;
+            start_auth_callback_from_deeplink(cx, payload);
+            Ok(())
+        }
         DeepLinkRoute::Settings => app_actions::open_settings_window(cx),
         DeepLinkRoute::OpenConfig => app_actions::open_config_file(),
         DeepLinkRoute::ThemeInstall => {
             let slug = route_argument
+                .and_then(|argument| match argument {
+                    DeepLinkArgument::Value(value) => Some(value),
+                    DeepLinkArgument::NewTab(_) | DeepLinkArgument::AuthCallback(_) => None,
+                })
                 .filter(|value| !value.trim().is_empty())
                 .ok_or_else(|| "Theme install deeplink requires a slug".to_string())?;
             start_theme_install_from_deeplink(cx, slug);
@@ -254,7 +358,7 @@ fn handle_open_urls_with_main_window<V: 'static>(
     cx: &mut App,
     urls: &[String],
     mut open_window: impl FnMut(&mut App),
-    mut dispatch: impl FnMut(&mut App, DeepLinkRoute, Option<String>) -> Result<(), String>,
+    mut dispatch: impl FnMut(&mut App, DeepLinkRoute, Option<DeepLinkArgument>) -> Result<(), String>,
 ) {
     for raw_url in urls {
         match DeepLinkRoute::parse(raw_url) {
@@ -347,10 +451,11 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::{
-        DeepLinkRoute, focus_or_open_main_window, handle_open_urls_with_main_window,
-        reopen_if_no_windows,
+        DeepLinkArgument, DeepLinkRoute, focus_or_open_main_window,
+        handle_open_urls_with_main_window, reopen_if_no_windows,
     };
     use crate::app_actions;
+    use crate::deeplink::{AuthCallbackDeepLink, NewTabDeepLink};
     use gpui::{
         App, AppContext, Context, IntoElement, Render, TestAppContext, Window, WindowOptions, div,
     };
@@ -503,7 +608,44 @@ mod tests {
         assert_eq!(cx.windows().len(), 1);
         assert_eq!(
             *handled.borrow(),
-            vec![(DeepLinkRoute::NewTab, Some("git status".to_string()))]
+            vec![(
+                DeepLinkRoute::NewTab,
+                Some(DeepLinkArgument::NewTab(NewTabDeepLink {
+                    command: Some("git status".to_string()),
+                    dir: None,
+                }))
+            )]
+        );
+    }
+
+    #[gpui::test]
+    fn new_tab_deeplink_passes_optional_command_and_dir(cx: &mut TestAppContext) {
+        let handled = RefCell::new(Vec::new());
+
+        cx.update(|app| {
+            handle_open_urls_with_main_window::<ReopenTestView>(
+                app,
+                &[String::from(
+                    "termy://new?cmd=git%20status&dir=%2Ftmp%2Fdemo",
+                )],
+                open_test_window,
+                |_, route, route_argument| {
+                    handled.borrow_mut().push((route, route_argument));
+                    Ok(())
+                },
+            );
+        });
+
+        assert_eq!(cx.windows().len(), 1);
+        assert_eq!(
+            *handled.borrow(),
+            vec![(
+                DeepLinkRoute::NewTab,
+                Some(DeepLinkArgument::NewTab(NewTabDeepLink {
+                    command: Some("git status".to_string()),
+                    dir: Some("/tmp/demo".to_string()),
+                }))
+            )]
         );
     }
 
@@ -530,7 +672,42 @@ mod tests {
             *handled.borrow(),
             vec![(
                 DeepLinkRoute::ThemeInstall,
-                Some("catppuccin-mocha".to_string())
+                Some(DeepLinkArgument::Value("catppuccin-mocha".to_string()))
+            )]
+        );
+    }
+
+    #[gpui::test]
+    fn auth_callback_deeplink_passes_session_payload(cx: &mut TestAppContext) {
+        let handled = RefCell::new(Vec::new());
+
+        cx.update(|app| {
+            handle_open_urls_with_main_window::<ReopenTestView>(
+                app,
+                &[String::from(
+                    "termy://auth/callback?session_token=abc123&id=123e4567-e89b-12d3-a456-426614174000&github_user_id=42&github_login=lasse",
+                )],
+                open_test_window,
+                |_, route, route_argument| {
+                    handled.borrow_mut().push((route, route_argument));
+                    Ok(())
+                },
+            );
+        });
+
+        assert_eq!(cx.windows().len(), 1);
+        assert_eq!(
+            *handled.borrow(),
+            vec![(
+                DeepLinkRoute::AuthCallback,
+                Some(DeepLinkArgument::AuthCallback(AuthCallbackDeepLink {
+                    session_token: "abc123".to_string(),
+                    user_id: Some("123e4567-e89b-12d3-a456-426614174000".to_string()),
+                    github_user_id: Some(42),
+                    github_login: Some("lasse".to_string()),
+                    avatar_url: None,
+                    name: None,
+                }))
             )]
         );
     }

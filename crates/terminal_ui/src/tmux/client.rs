@@ -184,10 +184,20 @@ impl TmuxClient {
         parse_snapshot(&self.session_name, &windows_output, &panes_output)
     }
 
-    pub fn new_window_after(&self, target_window_id: &str) -> Result<()> {
+    pub fn new_window_after(
+        &self,
+        target_window_id: &str,
+        working_dir: Option<&str>,
+    ) -> Result<()> {
         // Use explicit insert-after targeting so Termy tab creation is deterministic:
         // new tabs always appear immediately to the right of the active tab.
-        self.run_control_status_args(&["new-window", "-a", "-t", target_window_id])
+        let mut args = vec!["new-window", "-a", "-t", target_window_id];
+        let working_dir = working_dir.map(str::trim).filter(|value| !value.is_empty());
+        if let Some(working_dir) = working_dir {
+            args.push("-c");
+            args.push(working_dir);
+        }
+        self.run_control_status_args(&args)
     }
 
     pub fn kill_window(&self, window_id: &str) -> Result<()> {
