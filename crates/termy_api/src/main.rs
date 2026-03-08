@@ -19,6 +19,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use sqlx::{FromRow, PgPool, postgres::PgPoolOptions};
 use thiserror::Error;
+use tower_http::cors::CorsLayer;
 use tracing::{error, info};
 use url::Url;
 use uuid::Uuid;
@@ -149,6 +150,7 @@ async fn main() -> anyhow::Result<()> {
 }
 
 fn build_router(state: AppState) -> Router {
+    let cors = build_cors_layer();
     Router::new()
         .route("/health", get(health))
         .route("/auth/github/login", get(auth_github_login))
@@ -162,6 +164,7 @@ fn build_router(state: AppState) -> Router {
             "/themes/{slug}/versions",
             get(list_theme_versions).post(publish_theme_version),
         )
+        .layer(cors)
         .with_state(state)
 }
 
@@ -243,6 +246,8 @@ struct AuthUser {
     id: Uuid,
     github_user_id: i64,
     github_login: String,
+    avatar_url: Option<String>,
+    name: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -431,7 +436,7 @@ async fn auth_github_callback(
             avatar_url = EXCLUDED.avatar_url,
             name = EXCLUDED.name,
             updated_at = NOW()
-        RETURNING id, github_user_id, github_login
+        RETURNING id, github_user_id, github_login, avatar_url, name
         "#,
     )
     .bind(github_user.id)
@@ -452,23 +457,30 @@ async fn auth_github_callback(
         .execute(&state.db)
         .await?;
 
-    let cookie = build_session_cookie(
-        &token,
-        state.auth.session_ttl_hours,
-        state.auth.session_cookie_secure,
-        state.auth.session_cookie_domain.as_deref(),
-    );
-
     let target = redirect_to
         .or_else(|| state.auth.post_auth_redirect.clone())
         .unwrap_or_else(|| "/themes".to_string());
-    let mut response = Redirect::to(&target).into_response();
-
-    response.headers_mut().append(
-        header::SET_COOKIE,
-        HeaderValue::from_str(&cookie)
-            .map_err(|_| ApiError::ExternalAuth("failed to set session cookie".to_string()))?,
-    );
+    let response = if is_termy_deeplink(&target) {
+        let native_target = build_native_auth_redirect_target(&target, &token, &auth_user)
+            .map_err(|_| {
+                ApiError::ExternalAuth("failed to build native auth redirect".to_string())
+            })?;
+        Redirect::to(&native_target).into_response()
+    } else {
+        let cookie = build_session_cookie(
+            &token,
+            state.auth.session_ttl_hours,
+            state.auth.session_cookie_secure,
+            state.auth.session_cookie_domain.as_deref(),
+        );
+        let mut response = Redirect::to(&target).into_response();
+        response.headers_mut().append(
+            header::SET_COOKIE,
+            HeaderValue::from_str(&cookie)
+                .map_err(|_| ApiError::ExternalAuth("failed to set session cookie".to_string()))?,
+        );
+        response
+    };
 
     Ok(response)
 }
@@ -485,7 +497,7 @@ async fn auth_logout(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
-    if let Some(token) = extract_cookie(&headers, SESSION_COOKIE_NAME) {
+    if let Some(token) = extract_auth_token(&headers) {
         let token_hash = hash_token(&token);
         sqlx::query("DELETE FROM user_session WHERE token_hash = $1")
             .bind(token_hash)
@@ -1152,13 +1164,13 @@ fn multipart_error(error: axum::extract::multipart::MultipartError) -> ApiError 
 }
 
 async fn require_auth_user(state: &AppState, headers: &HeaderMap) -> Result<AuthUser, ApiError> {
-    let token = extract_cookie(headers, SESSION_COOKIE_NAME)
+    let token = extract_auth_token(headers)
         .ok_or_else(|| ApiError::Unauthorized("authentication required".to_string()))?;
     let token_hash = hash_token(&token);
 
     let user = sqlx::query_as::<_, AuthUser>(
         r#"
-        SELECT ua.id, ua.github_user_id, ua.github_login
+        SELECT ua.id, ua.github_user_id, ua.github_login, ua.avatar_url, ua.name
         FROM user_session us
         JOIN user_account ua ON ua.id = us.user_id
         WHERE us.token_hash = $1 AND us.expires_at > NOW()
@@ -1368,6 +1380,20 @@ fn extract_cookie(headers: &HeaderMap, cookie_name: &str) -> Option<String> {
     None
 }
 
+fn extract_auth_token(headers: &HeaderMap) -> Option<String> {
+    extract_bearer_token(headers).or_else(|| extract_cookie(headers, SESSION_COOKIE_NAME))
+}
+
+fn extract_bearer_token(headers: &HeaderMap) -> Option<String> {
+    let header_value = headers.get(header::AUTHORIZATION)?.to_str().ok()?.trim();
+    let token = header_value.strip_prefix("Bearer ")?.trim();
+    if token.is_empty() {
+        None
+    } else {
+        Some(token.to_string())
+    }
+}
+
 fn build_session_cookie(token: &str, ttl_hours: i64, secure: bool, domain: Option<&str>) -> String {
     let secure_flag = if secure { "; Secure" } else { "" };
     let domain_flag = domain
@@ -1393,6 +1419,47 @@ fn clear_session_cookie(secure: bool, domain: Option<&str>) -> String {
         domain = domain_flag,
         secure = secure_flag,
     )
+}
+
+fn is_termy_deeplink(target: &str) -> bool {
+    Url::parse(target)
+        .map(|url| url.scheme() == "termy")
+        .unwrap_or(false)
+}
+
+fn build_native_auth_redirect_target(
+    target: &str,
+    session_token: &str,
+    user: &AuthUser,
+) -> Result<String, url::ParseError> {
+    let mut url = Url::parse(target)?;
+    {
+        let mut pairs = url.query_pairs_mut();
+        pairs.append_pair("session_token", session_token);
+        pairs.append_pair("id", &user.id.to_string());
+        pairs.append_pair("github_user_id", &user.github_user_id.to_string());
+        pairs.append_pair("github_login", &user.github_login);
+        if let Some(avatar_url) = &user.avatar_url {
+            pairs.append_pair("avatar_url", avatar_url);
+        }
+        if let Some(name) = &user.name {
+            pairs.append_pair("name", name);
+        }
+    }
+    Ok(url.to_string())
+}
+
+fn build_cors_layer() -> CorsLayer {
+    CorsLayer::new()
+        .allow_origin(tower_http::cors::AllowOrigin::mirror_request())
+        .allow_credentials(true)
+        .allow_methods([
+            axum::http::Method::GET,
+            axum::http::Method::POST,
+            axum::http::Method::PATCH,
+            axum::http::Method::OPTIONS,
+        ])
+        .allow_headers([header::ACCEPT, header::AUTHORIZATION, header::CONTENT_TYPE])
 }
 
 fn hash_token(token: &str) -> String {

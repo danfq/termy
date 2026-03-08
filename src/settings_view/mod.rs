@@ -2,14 +2,14 @@ use crate::colors::TerminalColors;
 use crate::config::{self, AiProvider as ConfigAiProvider, AppConfig};
 use crate::plugins::{self, PluginInventoryEntry};
 use crate::text_input::{TextInputAlignment, TextInputElement, TextInputProvider, TextInputState};
-use crate::theme_store::{self, ThemeStoreTheme};
+use crate::theme_store::{self, ThemeStoreAuthSession, ThemeStoreAuthUser, ThemeStoreTheme};
 use crate::ui::scrollbar::{self as ui_scrollbar, ScrollbarPaintStyle, ScrollbarRange};
 use gpui::{
     AnyElement, AsyncApp, Context, FocusHandle, Font, InteractiveElement, IntoElement,
-    KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, Render,
-    Rgba, ScrollAnchor, ScrollHandle, ScrollWheelEvent, SharedString, StatefulInteractiveElement,
-    Styled, TextAlign, WeakEntity, Window, WindowBackgroundAppearance, deferred, div, point,
-    prelude::FluentBuilder, px,
+    KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ObjectFit,
+    ParentElement, Render, Rgba, ScrollAnchor, ScrollHandle, ScrollWheelEvent, SharedString,
+    StatefulInteractiveElement, Styled, StyledImage, TextAlign, WeakEntity, Window,
+    WindowBackgroundAppearance, deferred, div, img, point, prelude::FluentBuilder, px,
 };
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -105,6 +105,9 @@ pub struct SettingsWindow {
     theme_store_loaded: bool,
     theme_store_loading: bool,
     theme_store_error: Option<String>,
+    theme_store_auth_session: Option<ThemeStoreAuthSession>,
+    theme_store_auth_loading: bool,
+    theme_store_auth_error: Option<String>,
     theme_store_installed_versions: HashMap<String, String>,
     plugin_directory: Option<PathBuf>,
     plugin_inventory: Vec<PluginInventoryEntry>,
@@ -133,9 +136,10 @@ impl SettingsWindow {
             Self::build_searchable_setting_indices(&searchable_settings);
         let content_scroll_handle = ScrollHandle::new();
         let setting_scroll_anchors = Self::build_setting_scroll_anchors(&content_scroll_handle);
+        let theme_store_auth_session = theme_store::load_auth_session();
         let (plugin_directory, plugin_inventory, plugin_inventory_error) =
             Self::load_plugin_inventory();
-        let view = Self {
+        let mut view = Self {
             active_section: SettingsSection::Appearance,
             config,
             config_path,
@@ -168,12 +172,18 @@ impl SettingsWindow {
             theme_store_loaded: false,
             theme_store_loading: false,
             theme_store_error: None,
+            theme_store_auth_session,
+            theme_store_auth_loading: false,
+            theme_store_auth_error: None,
             theme_store_installed_versions: theme_store::load_installed_theme_versions(),
             plugin_directory,
             plugin_inventory,
             plugin_inventory_error,
         };
         view.focus_handle.focus(window, cx);
+        if view.theme_store_auth_session.is_some() {
+            view.refresh_theme_store_auth_user(cx);
+        }
 
         #[cfg(not(test))]
         {
@@ -382,6 +392,148 @@ impl SettingsWindow {
         self.theme_store_installed_versions
             .insert(slug.trim().to_ascii_lowercase(), version.to_string());
         cx.notify();
+    }
+
+    pub(crate) fn apply_theme_store_auth_session(
+        &mut self,
+        session: ThemeStoreAuthSession,
+        cx: &mut Context<Self>,
+    ) {
+        self.theme_store_auth_session = Some(session);
+        self.theme_store_auth_loading = false;
+        self.theme_store_auth_error = None;
+        cx.notify();
+    }
+
+    pub(crate) fn clear_theme_store_auth_session(&mut self, cx: &mut Context<Self>) {
+        self.theme_store_auth_session = None;
+        self.theme_store_auth_loading = false;
+        self.theme_store_auth_error = None;
+        cx.notify();
+    }
+
+    fn refresh_theme_store_auth_user(&mut self, cx: &mut Context<Self>) {
+        if self.theme_store_auth_loading {
+            return;
+        }
+        let Some(session) = self.theme_store_auth_session.clone() else {
+            return;
+        };
+
+        self.theme_store_auth_loading = true;
+        self.theme_store_auth_error = None;
+        let api_base = Self::theme_store_api_base_url();
+
+        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let session_token = session.session_token.clone();
+            let result = smol::unblock(move || {
+                theme_store::fetch_auth_user_blocking(&api_base, &session_token).map(|user| {
+                    ThemeStoreAuthSession {
+                        session_token,
+                        user,
+                    }
+                })
+            })
+            .await;
+
+            let _ = cx.update(|cx| {
+                this.update(cx, |view, cx| {
+                    view.theme_store_auth_loading = false;
+                    match result {
+                        Ok(session) => {
+                            if let Err(error) = theme_store::persist_auth_session(&session) {
+                                log::error!("Failed to persist auth session: {}", error);
+                                view.theme_store_auth_error = Some(error);
+                            } else {
+                                view.theme_store_auth_error = None;
+                            }
+                            view.theme_store_auth_session = Some(session);
+                        }
+                        Err(error) => {
+                            log::error!("Failed to refresh theme store auth session: {}", error);
+                            view.theme_store_auth_error = Some(error);
+                        }
+                    }
+                    cx.notify();
+                })
+            });
+        })
+        .detach();
+    }
+
+    fn begin_theme_store_login(&mut self, cx: &mut Context<Self>) {
+        let login_url =
+            theme_store::theme_store_native_login_url(&Self::theme_store_api_base_url());
+        self.theme_store_auth_error = None;
+        match Self::open_url(&login_url) {
+            Ok(()) => {
+                self.theme_store_auth_loading = true;
+                cx.notify();
+            }
+            Err(error) => {
+                self.theme_store_auth_loading = false;
+                self.theme_store_auth_error = Some(error.clone());
+                termy_toast::error(error);
+                cx.notify();
+            }
+        }
+    }
+
+    fn logout_theme_store_user(&mut self, cx: &mut Context<Self>) {
+        if self.theme_store_auth_loading {
+            return;
+        }
+        let Some(session) = self.theme_store_auth_session.clone() else {
+            return;
+        };
+
+        self.theme_store_auth_loading = true;
+        self.theme_store_auth_error = None;
+        let api_base = Self::theme_store_api_base_url();
+
+        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let session_token = session.session_token.clone();
+            let result = smol::unblock(move || {
+                theme_store::logout_auth_session_blocking(&api_base, &session_token)?;
+                theme_store::clear_auth_session()
+            })
+            .await;
+
+            let _ = cx.update(|cx| {
+                this.update(cx, |view, cx| {
+                    view.theme_store_auth_loading = false;
+                    match result {
+                        Ok(()) => {
+                            view.theme_store_auth_session = None;
+                            view.theme_store_auth_error = None;
+                            termy_toast::success("Logged out from theme store");
+                        }
+                        Err(error) => {
+                            log::error!("Failed to logout from theme store: {}", error);
+                            view.theme_store_auth_error = Some(error.clone());
+                            termy_toast::error(error);
+                        }
+                    }
+                    cx.notify();
+                })
+            });
+        })
+        .detach();
+    }
+
+    fn theme_store_auth_display_name(user: &ThemeStoreAuthUser) -> String {
+        user.name
+            .clone()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| format!("@{}", user.github_login))
+    }
+
+    fn theme_store_auth_avatar_fallback_label(user: &ThemeStoreAuthUser) -> String {
+        user.github_login
+            .chars()
+            .next()
+            .map(|ch| ch.to_ascii_uppercase().to_string())
+            .unwrap_or_else(|| "?".to_string())
     }
 
     pub(super) fn open_url(url: &str) -> Result<(), String> {

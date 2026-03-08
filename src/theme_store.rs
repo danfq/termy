@@ -2,6 +2,7 @@ use crate::config;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use termy_themes::{Rgb8, ThemeColors, normalize_theme_id};
+use url::Url;
 
 const DEFAULT_THEME_STORE_API_URL: &str = "https://api.termy.run";
 const DEFAULT_THEME_DEEPLINK_API_URL: &str = "https://termy.run/theme-api";
@@ -22,8 +23,32 @@ pub(crate) struct InstalledTheme {
     pub(crate) message: String,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct ThemeStoreAuthUser {
+    pub(crate) id: String,
+    pub(crate) github_user_id: i64,
+    pub(crate) github_login: String,
+    pub(crate) avatar_url: Option<String>,
+    pub(crate) name: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct ThemeStoreAuthSession {
+    pub(crate) session_token: String,
+    pub(crate) user: ThemeStoreAuthUser,
+}
+
 pub(crate) fn theme_store_api_base_url() -> String {
     std::env::var("THEME_STORE_API_URL").unwrap_or_else(|_| DEFAULT_THEME_STORE_API_URL.into())
+}
+
+pub(crate) fn theme_store_native_login_url(api_base: &str) -> String {
+    let base = api_base.trim_end_matches('/');
+    let mut url = Url::parse(&format!("{base}/auth/github/login"))
+        .expect("theme store API base must be valid");
+    url.query_pairs_mut()
+        .append_pair("redirect_to", "termy://auth/callback");
+    url.into()
 }
 
 pub(crate) fn fetch_theme_store_themes_blocking(
@@ -75,6 +100,73 @@ pub(crate) fn fetch_theme_for_deeplink_blocking(slug: &str) -> Result<ThemeStore
 
     parse_theme_value(&payload)
         .ok_or_else(|| format!("Theme response for '{slug}' is missing required fields"))
+}
+
+pub(crate) fn fetch_auth_user_blocking(
+    api_base: &str,
+    session_token: &str,
+) -> Result<ThemeStoreAuthUser, String> {
+    let base = api_base.trim_end_matches('/');
+    let url = format!("{base}/auth/me");
+    let response = ureq::get(&url)
+        .set("Accept", "application/json")
+        .set("Authorization", &format!("Bearer {}", session_token.trim()))
+        .call()
+        .map_err(|error| format!("Failed to resolve authenticated user: {error}"))?;
+
+    response
+        .into_json::<ThemeStoreAuthUser>()
+        .map_err(|error| format!("Invalid authenticated user response: {error}"))
+}
+
+pub(crate) fn logout_auth_session_blocking(
+    api_base: &str,
+    session_token: &str,
+) -> Result<(), String> {
+    let base = api_base.trim_end_matches('/');
+    let url = format!("{base}/auth/logout");
+    let response = ureq::post(&url)
+        .set("Authorization", &format!("Bearer {}", session_token.trim()))
+        .call();
+
+    match response {
+        Ok(_) => Ok(()),
+        Err(ureq::Error::Status(401, _)) => Ok(()),
+        Err(error) => Err(format!("Failed to logout from theme store: {error}")),
+    }
+}
+
+pub(crate) fn load_auth_session() -> Option<ThemeStoreAuthSession> {
+    let path = auth_session_path()?;
+    let contents = std::fs::read_to_string(path).ok()?;
+    serde_json::from_str::<ThemeStoreAuthSession>(&contents).ok()
+}
+
+pub(crate) fn persist_auth_session(session: &ThemeStoreAuthSession) -> Result<(), String> {
+    let Some(path) = auth_session_path() else {
+        return Err("Config path unavailable".to_string());
+    };
+    let Some(parent) = path.parent() else {
+        return Err("Invalid auth session path".to_string());
+    };
+    std::fs::create_dir_all(parent)
+        .map_err(|error| format!("Failed to create auth session directory: {error}"))?;
+    let contents = serde_json::to_string_pretty(session)
+        .map_err(|error| format!("Failed to serialize auth session: {error}"))?;
+    std::fs::write(path, contents)
+        .map_err(|error| format!("Failed to write auth session: {error}"))?;
+    Ok(())
+}
+
+pub(crate) fn clear_auth_session() -> Result<(), String> {
+    let Some(path) = auth_session_path() else {
+        return Ok(());
+    };
+    if path.exists() {
+        std::fs::remove_file(path)
+            .map_err(|error| format!("Failed to clear auth session: {error}"))?;
+    }
+    Ok(())
 }
 
 pub(crate) fn load_installed_theme_versions() -> HashMap<String, String> {
@@ -215,6 +307,12 @@ fn installed_theme_state_path() -> Option<PathBuf> {
     let config_path = config::ensure_config_file().ok()?;
     let parent = config_path.parent()?;
     Some(parent.join("theme_store_installed.json"))
+}
+
+fn auth_session_path() -> Option<PathBuf> {
+    let config_path = config::ensure_config_file().ok()?;
+    let parent = config_path.parent()?;
+    Some(parent.join("theme_store_auth.json"))
 }
 
 fn installed_themes_dir_path() -> Option<PathBuf> {

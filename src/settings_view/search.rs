@@ -592,20 +592,143 @@ impl SettingsWindow {
             .child(self.render_sidebar_footer(cx))
     }
 
-    pub(super) fn render_sidebar_footer(&self, _cx: &mut Context<Self>) -> impl IntoElement {
+    pub(super) fn render_sidebar_footer(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let text_muted = self.text_muted();
+        let text_primary = self.text_primary();
         let border_color = self.border_color();
-        div()
+        let button_border = self.accent_with_alpha(0.35);
+        let login_bg = self.bg_input();
+        let hover_bg = self.bg_hover();
+        let auth_status: AnyElement = match self.theme_store_auth_session.clone() {
+            Some(session) => {
+                let user = session.user;
+                let display_name = Self::theme_store_auth_display_name(&user);
+                let avatar_fallback = Self::theme_store_auth_avatar_fallback_label(&user);
+                let avatar: AnyElement = match user.avatar_url.clone() {
+                    Some(avatar_url) => div()
+                        .w(px(30.0))
+                        .h(px(30.0))
+                        .rounded_full()
+                        .overflow_hidden()
+                        .bg(self.bg_input())
+                        .child(
+                            img(avatar_url)
+                                .w_full()
+                                .h_full()
+                                .object_fit(ObjectFit::Cover),
+                        )
+                        .into_any_element(),
+                    None => div()
+                        .w(px(30.0))
+                        .h(px(30.0))
+                        .rounded_full()
+                        .bg(self.accent_with_alpha(0.18))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .text_xs()
+                        .font_weight(gpui::FontWeight::BOLD)
+                        .text_color(text_primary)
+                        .child(avatar_fallback)
+                        .into_any_element(),
+                };
+
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(8.0))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(10.0))
+                            .child(avatar)
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w(px(0.0))
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .text_color(text_primary)
+                                            .child(display_name),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(text_muted)
+                                            .child(format!("@{}", user.github_login)),
+                                    ),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .id("theme-store-logout-button")
+                            .px_3()
+                            .py(px(8.0))
+                            .rounded(px(0.0))
+                            .border_1()
+                            .border_color(button_border)
+                            .bg(login_bg)
+                            .cursor_pointer()
+                            .hover(|s| s.bg(hover_bg))
+                            .text_xs()
+                            .text_color(text_primary)
+                            .child(if self.theme_store_auth_loading {
+                                "Signing out..."
+                            } else {
+                                "Logout"
+                            })
+                            .on_click(cx.listener(|view, _, _, cx| {
+                                view.logout_theme_store_user(cx);
+                            })),
+                    )
+                    .into_any_element()
+            }
+            None => div()
+                .id("theme-store-login-button")
+                .px_3()
+                .py(px(9.0))
+                .rounded(px(0.0))
+                .border_1()
+                .border_color(button_border)
+                .bg(login_bg)
+                .cursor_pointer()
+                .hover(|s| s.bg(hover_bg))
+                .text_sm()
+                .text_color(text_primary)
+                .child(if self.theme_store_auth_loading {
+                    "Waiting for GitHub login..."
+                } else {
+                    "Login with GitHub"
+                })
+                .on_click(cx.listener(|view, _, _, cx| {
+                    view.begin_theme_store_login(cx);
+                }))
+                .into_any_element(),
+        };
+
+        let mut footer = div()
             .border_t_1()
             .border_color(border_color)
             .px_4()
             .py_3()
+            .flex()
+            .flex_col()
+            .gap(px(10.0))
+            .child(auth_status)
             .child(
                 div()
                     .text_xs()
                     .text_color(text_muted)
                     .child(format!("Termy v{}", crate::APP_VERSION)),
-            )
+            );
+
+        if let Some(error) = self.theme_store_auth_error.clone() {
+            footer = footer.child(div().text_xs().text_color(self.accent()).child(error));
+        }
+
+        footer
     }
 
     pub(super) fn search_input_content(

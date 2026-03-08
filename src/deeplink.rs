@@ -4,6 +4,7 @@ use url::Url;
 pub(crate) enum DeepLinkRoute {
     Activate,
     NewTab,
+    AuthCallback,
     Settings,
     OpenConfig,
     ThemeInstall,
@@ -16,8 +17,19 @@ pub(crate) struct NewTabDeepLink {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct AuthCallbackDeepLink {
+    pub(crate) session_token: String,
+    pub(crate) user_id: Option<String>,
+    pub(crate) github_user_id: Option<i64>,
+    pub(crate) github_login: Option<String>,
+    pub(crate) avatar_url: Option<String>,
+    pub(crate) name: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum DeepLinkArgument {
     NewTab(NewTabDeepLink),
+    AuthCallback(AuthCallbackDeepLink),
     Value(String),
 }
 
@@ -71,6 +83,62 @@ impl DeepLinkRoute {
                 };
                 Ok((Self::NewTab, argument))
             }
+            ["auth", "callback"] => {
+                let session_token = url
+                    .query_pairs()
+                    .find_map(|(key, value)| {
+                        key.eq_ignore_ascii_case("session_token")
+                            .then(|| value.into_owned())
+                    })
+                    .filter(|value| !value.trim().is_empty())
+                    .ok_or_else(|| {
+                        "Auth callback deeplink requires ?session_token=<token>".to_string()
+                    })?;
+                let github_login = url
+                    .query_pairs()
+                    .find_map(|(key, value)| {
+                        key.eq_ignore_ascii_case("github_login")
+                            .then(|| value.into_owned())
+                    })
+                    .filter(|value| !value.trim().is_empty());
+                let user_id = url
+                    .query_pairs()
+                    .find_map(|(key, value)| {
+                        key.eq_ignore_ascii_case("id").then(|| value.into_owned())
+                    })
+                    .filter(|value| !value.trim().is_empty());
+                let github_user_id = url
+                    .query_pairs()
+                    .find_map(|(key, value)| {
+                        key.eq_ignore_ascii_case("github_user_id")
+                            .then(|| value.into_owned())
+                    })
+                    .and_then(|value| value.trim().parse::<i64>().ok());
+                let avatar_url = url
+                    .query_pairs()
+                    .find_map(|(key, value)| {
+                        key.eq_ignore_ascii_case("avatar_url")
+                            .then(|| value.into_owned())
+                    })
+                    .filter(|value| !value.trim().is_empty());
+                let name = url
+                    .query_pairs()
+                    .find_map(|(key, value)| {
+                        key.eq_ignore_ascii_case("name").then(|| value.into_owned())
+                    })
+                    .filter(|value| !value.trim().is_empty());
+                Ok((
+                    Self::AuthCallback,
+                    Some(DeepLinkArgument::AuthCallback(AuthCallbackDeepLink {
+                        session_token,
+                        user_id,
+                        github_user_id,
+                        github_login,
+                        avatar_url,
+                        name,
+                    })),
+                ))
+            }
             ["settings"] => Ok((Self::Settings, None)),
             ["open", "config"] => Ok((Self::OpenConfig, None)),
             ["store", "theme-install"] => {
@@ -95,7 +163,9 @@ impl DeepLinkRoute {
 
 #[cfg(test)]
 mod tests {
-    use super::{DeepLinkArgument, DeepLinkRoute, DeepLinkRoute::*, NewTabDeepLink};
+    use super::{
+        AuthCallbackDeepLink, DeepLinkArgument, DeepLinkRoute, DeepLinkRoute::*, NewTabDeepLink,
+    };
 
     #[test]
     fn parses_bare_scheme_as_activate_route() {
@@ -157,6 +227,26 @@ mod tests {
         assert_eq!(
             DeepLinkRoute::parse("termy://open/config?source=browser#top"),
             Ok((OpenConfig, None))
+        );
+    }
+
+    #[test]
+    fn parses_auth_callback_route() {
+        assert_eq!(
+            DeepLinkRoute::parse(
+                "termy://auth/callback?session_token=abc123&id=123e4567-e89b-12d3-a456-426614174000&github_user_id=42&github_login=lasse&avatar_url=https%3A%2F%2Fexample.com%2Fa.png&name=Lasse"
+            ),
+            Ok((
+                AuthCallback,
+                Some(DeepLinkArgument::AuthCallback(AuthCallbackDeepLink {
+                    session_token: "abc123".to_string(),
+                    user_id: Some("123e4567-e89b-12d3-a456-426614174000".to_string()),
+                    github_user_id: Some(42),
+                    github_login: Some("lasse".to_string()),
+                    avatar_url: Some("https://example.com/a.png".to_string()),
+                    name: Some("Lasse".to_string()),
+                }))
+            ))
         );
     }
 
