@@ -353,7 +353,7 @@ fn tmux_new_window_after_inserts_immediately_after_target_window() {
         .expect("middle window must have a right neighbor in seeded layout");
 
     client
-        .new_window_after(middle_window_id.as_str())
+        .new_window_after(middle_window_id.as_str(), None)
         .expect("insert-after target window should succeed");
 
     let after_insert = client

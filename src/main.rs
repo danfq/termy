@@ -16,7 +16,7 @@ mod theme_store;
 mod ui;
 
 use commands::{OpenConfig, OpenSettings};
-use deeplink::DeepLinkRoute;
+use deeplink::{DeepLinkArgument, DeepLinkRoute};
 use flume::Receiver;
 use gpui::{App, Application, AsyncApp, Bounds, WindowBounds, WindowOptions, prelude::*, px, size};
 use startup::StartupBlocker;
@@ -233,15 +233,25 @@ fn start_theme_install_from_deeplink(cx: &mut App, slug: String) {
 fn dispatch_deeplink(
     cx: &mut App,
     route: DeepLinkRoute,
-    route_argument: Option<String>,
+    route_argument: Option<DeepLinkArgument>,
 ) -> Result<(), String> {
     match route {
         DeepLinkRoute::Activate => Ok(()),
-        DeepLinkRoute::NewTab => app_actions::open_new_tab_in_main_window(cx, route_argument),
+        DeepLinkRoute::NewTab => {
+            let (command, dir) = match route_argument {
+                Some(DeepLinkArgument::NewTab(payload)) => (payload.command, payload.dir),
+                Some(DeepLinkArgument::Value(_)) | None => (None, None),
+            };
+            app_actions::open_new_tab_in_main_window(cx, command, dir)
+        }
         DeepLinkRoute::Settings => app_actions::open_settings_window(cx),
         DeepLinkRoute::OpenConfig => app_actions::open_config_file(),
         DeepLinkRoute::ThemeInstall => {
             let slug = route_argument
+                .and_then(|argument| match argument {
+                    DeepLinkArgument::Value(value) => Some(value),
+                    DeepLinkArgument::NewTab(_) => None,
+                })
                 .filter(|value| !value.trim().is_empty())
                 .ok_or_else(|| "Theme install deeplink requires a slug".to_string())?;
             start_theme_install_from_deeplink(cx, slug);
@@ -254,7 +264,7 @@ fn handle_open_urls_with_main_window<V: 'static>(
     cx: &mut App,
     urls: &[String],
     mut open_window: impl FnMut(&mut App),
-    mut dispatch: impl FnMut(&mut App, DeepLinkRoute, Option<String>) -> Result<(), String>,
+    mut dispatch: impl FnMut(&mut App, DeepLinkRoute, Option<DeepLinkArgument>) -> Result<(), String>,
 ) {
     for raw_url in urls {
         match DeepLinkRoute::parse(raw_url) {
@@ -347,10 +357,11 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::{
-        DeepLinkRoute, focus_or_open_main_window, handle_open_urls_with_main_window,
-        reopen_if_no_windows,
+        DeepLinkArgument, DeepLinkRoute, focus_or_open_main_window,
+        handle_open_urls_with_main_window, reopen_if_no_windows,
     };
     use crate::app_actions;
+    use crate::deeplink::NewTabDeepLink;
     use gpui::{
         App, AppContext, Context, IntoElement, Render, TestAppContext, Window, WindowOptions, div,
     };
@@ -503,7 +514,44 @@ mod tests {
         assert_eq!(cx.windows().len(), 1);
         assert_eq!(
             *handled.borrow(),
-            vec![(DeepLinkRoute::NewTab, Some("git status".to_string()))]
+            vec![(
+                DeepLinkRoute::NewTab,
+                Some(DeepLinkArgument::NewTab(NewTabDeepLink {
+                    command: Some("git status".to_string()),
+                    dir: None,
+                }))
+            )]
+        );
+    }
+
+    #[gpui::test]
+    fn new_tab_deeplink_passes_optional_command_and_dir(cx: &mut TestAppContext) {
+        let handled = RefCell::new(Vec::new());
+
+        cx.update(|app| {
+            handle_open_urls_with_main_window::<ReopenTestView>(
+                app,
+                &[String::from(
+                    "termy://new?cmd=git%20status&dir=%2Ftmp%2Fdemo",
+                )],
+                open_test_window,
+                |_, route, route_argument| {
+                    handled.borrow_mut().push((route, route_argument));
+                    Ok(())
+                },
+            );
+        });
+
+        assert_eq!(cx.windows().len(), 1);
+        assert_eq!(
+            *handled.borrow(),
+            vec![(
+                DeepLinkRoute::NewTab,
+                Some(DeepLinkArgument::NewTab(NewTabDeepLink {
+                    command: Some("git status".to_string()),
+                    dir: Some("/tmp/demo".to_string()),
+                }))
+            )]
         );
     }
 
@@ -530,7 +578,7 @@ mod tests {
             *handled.borrow(),
             vec![(
                 DeepLinkRoute::ThemeInstall,
-                Some("catppuccin-mocha".to_string())
+                Some(DeepLinkArgument::Value("catppuccin-mocha".to_string()))
             )]
         );
     }

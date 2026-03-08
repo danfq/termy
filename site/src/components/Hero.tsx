@@ -4,6 +4,7 @@ import { InteractiveTerminal } from "@/components/InteractiveTerminal";
 import { Button } from "@/components/ui/button";
 import { getPreferredDownload, type Release } from "@/hooks/useGitHubRelease";
 import { CopyButton } from "./animate-ui/components/buttons/copy";
+import { WindowsIcon } from "./platform-icons";
 
 interface TerminalTab {
   id: number;
@@ -142,13 +143,6 @@ export function Hero({ release }: HeroProps): JSX.Element {
     setCopied(false);
   }
 
-  function handleCopy(): void {
-    navigator.clipboard.writeText(installCommands[pm]);
-    setCopied(true);
-    if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
-    copyTimerRef.current = setTimeout(() => setCopied(false), 2000);
-  }
-
   const pmButtons = packageManagers.map((key) => (
     <button
       key={key}
@@ -236,7 +230,15 @@ export function Hero({ release }: HeroProps): JSX.Element {
                 macOS
               </span>
               <span className="flex items-center gap-1">
-                <img src="/linux-tux.svg" alt="Linux" className="w-3.5 h-3.5" />
+                <WindowsIcon />
+                Windows
+              </span>
+              <span className="flex items-center gap-1">
+                <img
+                  src="/linux-tux.svg"
+                  alt="Linux"
+                  className="w-3.5 h-3.5 grayscale"
+                />
                 Linux
               </span>
             </div>

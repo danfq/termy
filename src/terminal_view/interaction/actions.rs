@@ -251,10 +251,12 @@ impl TerminalView {
     pub(crate) fn open_new_tab_from_deeplink(
         &mut self,
         command: Option<&str>,
+        working_dir: Option<&str>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.execute_command_action(CommandAction::NewTab, true, window, cx);
+        let _ = window;
+        self.add_tab_with_working_dir(working_dir, cx);
         if let Some(command) = command.filter(|value| !value.is_empty())
             && let Some(tab) = self.tabs.get(self.active_tab)
             && let Some(terminal) = tab.active_terminal()

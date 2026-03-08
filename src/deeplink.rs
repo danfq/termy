@@ -9,8 +9,20 @@ pub(crate) enum DeepLinkRoute {
     ThemeInstall,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct NewTabDeepLink {
+    pub(crate) command: Option<String>,
+    pub(crate) dir: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum DeepLinkArgument {
+    NewTab(NewTabDeepLink),
+    Value(String),
+}
+
 impl DeepLinkRoute {
-    pub(crate) fn parse(raw: &str) -> Result<(Self, Option<String>), String> {
+    pub(crate) fn parse(raw: &str) -> Result<(Self, Option<DeepLinkArgument>), String> {
         let url = Url::parse(raw).map_err(|error| format!("Invalid Termy deeplink: {error}"))?;
 
         if url.scheme() != "termy" {
@@ -45,8 +57,19 @@ impl DeepLinkRoute {
                     .find_map(|(key, value)| {
                         key.eq_ignore_ascii_case("cmd").then(|| value.into_owned())
                     })
-                    .filter(|value| !value.is_empty());
-                Ok((Self::NewTab, command))
+                    .filter(|value| !value.trim().is_empty());
+                let dir = url
+                    .query_pairs()
+                    .find_map(|(key, value)| {
+                        key.eq_ignore_ascii_case("dir").then(|| value.into_owned())
+                    })
+                    .filter(|value| !value.trim().is_empty());
+                let argument = if command.is_none() && dir.is_none() {
+                    None
+                } else {
+                    Some(DeepLinkArgument::NewTab(NewTabDeepLink { command, dir }))
+                };
+                Ok((Self::NewTab, argument))
             }
             ["settings"] => Ok((Self::Settings, None)),
             ["open", "config"] => Ok((Self::OpenConfig, None)),
@@ -60,7 +83,7 @@ impl DeepLinkRoute {
                     .ok_or_else(|| {
                         "Theme install deeplink requires ?slug=<theme-slug>".to_string()
                     })?;
-                Ok((Self::ThemeInstall, Some(slug)))
+                Ok((Self::ThemeInstall, Some(DeepLinkArgument::Value(slug))))
             }
             _ => Err(format!(
                 "Unsupported Termy deeplink route: {}",
@@ -72,7 +95,7 @@ impl DeepLinkRoute {
 
 #[cfg(test)]
 mod tests {
-    use super::{DeepLinkRoute, DeepLinkRoute::*};
+    use super::{DeepLinkArgument, DeepLinkRoute, DeepLinkRoute::*, NewTabDeepLink};
 
     #[test]
     fn parses_bare_scheme_as_activate_route() {
@@ -101,7 +124,23 @@ mod tests {
         assert_eq!(DeepLinkRoute::parse("termy://new"), Ok((NewTab, None)));
         assert_eq!(
             DeepLinkRoute::parse("termy://new?cmd=git%20status"),
-            Ok((NewTab, Some("git status".to_string())))
+            Ok((
+                NewTab,
+                Some(DeepLinkArgument::NewTab(NewTabDeepLink {
+                    command: Some("git status".to_string()),
+                    dir: None,
+                }))
+            ))
+        );
+        assert_eq!(
+            DeepLinkRoute::parse("termy://new?cmd=git%20status&dir=%2Ftmp%2Fdemo"),
+            Ok((
+                NewTab,
+                Some(DeepLinkArgument::NewTab(NewTabDeepLink {
+                    command: Some("git status".to_string()),
+                    dir: Some("/tmp/demo".to_string()),
+                }))
+            ))
         );
     }
 
@@ -125,7 +164,10 @@ mod tests {
     fn parses_theme_install_route() {
         assert_eq!(
             DeepLinkRoute::parse("termy://store/theme-install?slug=catppuccin-mocha"),
-            Ok((ThemeInstall, Some("catppuccin-mocha".to_string())))
+            Ok((
+                ThemeInstall,
+                Some(DeepLinkArgument::Value("catppuccin-mocha".to_string()))
+            ))
         );
     }
 

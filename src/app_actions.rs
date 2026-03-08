@@ -46,6 +46,7 @@ pub(crate) fn update_open_settings_windows(
 pub(crate) fn open_new_tab_in_main_window(
     cx: &mut App,
     command: Option<String>,
+    dir: Option<String>,
 ) -> Result<(), String> {
     let Some(main_window) = cx
         .windows()
@@ -57,7 +58,7 @@ pub(crate) fn open_new_tab_in_main_window(
 
     main_window
         .update(cx, |view, window, cx| {
-            view.open_new_tab_from_deeplink(command.as_deref(), window, cx);
+            view.open_new_tab_from_deeplink(command.as_deref(), dir.as_deref(), window, cx);
         })
         .map_err(|error| format!("Failed to open new tab from deeplink: {error}"))?;
 
