@@ -127,6 +127,7 @@ const TMUX_UNSUPPORTED_WINDOWS_TOAST: &str =
 const INPUT_SCROLL_SUPPRESS_MS: u64 = 160;
 const TOAST_COPY_FEEDBACK_MS: u64 = 1200;
 const WINDOW_RESIZE_INDICATOR_MS: u64 = 850;
+const ALT_SCREEN_POLL_FRAME_MS: u64 = 33;
 const CHILD_WORKING_DIR_CACHE_TTL: Duration = Duration::from_millis(CHILD_WORKING_DIR_CACHE_TTL_MS);
 const OVERLAY_PANEL_ALPHA_FLOOR_RATIO: f32 = 0.72;
 const OVERLAY_PANEL_BORDER_ALPHA: f32 = 0.24;
@@ -1127,6 +1128,7 @@ pub struct TerminalView {
     resize_indicator_dims: Option<(u16, u16)>,
     resize_indicator_visible_until: Option<Instant>,
     resize_indicator_animation_scheduled: bool,
+    alt_screen_refresh_scheduled: bool,
     show_debug_overlay: bool,
     debug_overlay_stats: DebugOverlayStats,
     install_cli_available: bool,
@@ -2272,6 +2274,7 @@ impl TerminalView {
             resize_indicator_dims: None,
             resize_indicator_visible_until: None,
             resize_indicator_animation_scheduled: false,
+            alt_screen_refresh_scheduled: false,
             show_debug_overlay: config.show_debug_overlay,
             debug_overlay_stats: DebugOverlayStats::new(),
             install_cli_available: Self::install_cli_available_from_system(),
